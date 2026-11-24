@@ -35,10 +35,10 @@ function wire(c: DataConnection) {
   c.on("error", () => { NET.conns.delete(c.peer); NET.onLeave(c.peer); });
 }
 
-/** стать хозяином: вернёт код комнаты */
-export function host(): Promise<string> {
+/** стать хозяином: вернёт код комнаты. code — занять прежний код (после обновления страницы) */
+export function host(want?: string, tries = 8): Promise<string> {
   return new Promise((res, rej) => {
-    const code = Array.from({ length: 5 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
+    const code = want ?? Array.from({ length: 5 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
     const peer = new Peer(PREFIX + code, opts());
     NET.peer = peer;
     NET.status = "Подключаюсь…";
@@ -50,7 +50,17 @@ export function host(): Promise<string> {
       if (NET.conns.size >= 3) { c.on("open", () => c.close()); return; } // до 4 игроков
       c.on("open", () => { NET.conns.set(c.peer, c); wire(c); NET.onJoin(c.peer); });
     });
-    peer.on("error", (e) => { NET.status = "Ошибка сети: " + e.type; rej(e); });
+    peer.on("error", (e) => {
+      // прежний код ещё числится за закрытой вкладкой — подождать и занять снова
+      if (want && e.type === "unavailable-id" && tries > 0) {
+        peer.destroy();
+        setTimeout(() => host(want, tries - 1).then(res, rej), 2000);
+        return;
+      }
+      if (NET.role === "host") { NET.status = "Ошибка сети: " + e.type; return; } // после старта — не роняем игру
+      peer.destroy(); if (NET.peer === peer) NET.peer = null;
+      NET.status = "Ошибка сети: " + e.type; rej(e);
+    });
   });
 }
 
@@ -69,15 +79,28 @@ export function join(code: string): Promise<void> {
         c.on("close", () => { NET.conns.delete("host"); NET.onLeave("host"); });
         res();
       });
-      c.on("error", (e) => rej(e));
+      c.on("error", (e) => { peer.destroy(); if (NET.peer === peer) NET.peer = null; rej(e); });
+      // хозяин не ответил за 8 с — неудача (иначе ожидание может зависнуть)
+      setTimeout(() => { if (NET.role !== "client" && !peer.destroyed) { NET.status = NET.status || "Игра не отвечает"; peer.destroy(); if (NET.peer === peer) NET.peer = null; rej(new Error("timeout")); } }, 8000);
     });
-    peer.on("error", (e) => { NET.status = e.type === "peer-unavailable" ? "Игра с таким кодом не найдена" : "Ошибка сети: " + e.type; rej(e); });
+    peer.on("error", (e) => {
+      if (NET.role === "client") return;
+      NET.status = e.type === "peer-unavailable" ? "Игра с таким кодом не найдена" : "Ошибка сети: " + e.type;
+      peer.destroy(); if (NET.peer === peer) NET.peer = null;
+      rej(e);
+    });
   });
 }
 
 export function send(m: Msg, to?: string, except?: string) {
   if (to) { NET.conns.get(to)?.send(m); return; }
   for (const [id, c] of NET.conns) if (id !== except && c.open) c.send(m);
+}
+
+/** закрыть одно соединение (гость пропал) */
+export function drop(id: string) {
+  NET.conns.get(id)?.close();
+  NET.conns.delete(id);
 }
 
 export function leave() {

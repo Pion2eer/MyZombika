@@ -4,7 +4,7 @@
 // Тачскрин: левая половина экрана — стик ходьбы, правая — стик прицела (тянешь — стреляет).
 import Phaser from "phaser";
 import { sfx, toggleMute, unlockAudio } from "./sfx";
-import { NET, host as netHost, join as netJoin, send, leave as netLeave } from "./net";
+import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
 import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, grenadeVox, medkitVox, heroBody, heroHead, renderStack, setPalette, type Palette } from "./heroStack";
 
@@ -66,6 +66,8 @@ class Humanoid {
   feet: Phaser.GameObjects.Ellipse[];
   /** руки на месте (0 — левая, 1 — правая); оторванная — культя у плеча */
   armsOn = [true, true];
+  /** отдача: 1 — сразу после выстрела, быстро спадает до 0 (автомат и руки дёргаются назад и вверх) */
+  recoil = 0;
   /** длинная тень: перевёрнутый чёрный силуэт (тело, голова, руки), наклонённый как у деревьев */
   cast: Phaser.GameObjects.Container;
   castIn: Phaser.GameObjects.Container;
@@ -123,20 +125,23 @@ class Humanoid {
     };
     if (this.gun) {
       const g = Math.sin(a) < -0.25 ? this.back : this.front;
-      const s0 = P(1, 2, 8.2), s1 = P(8, 2, 8.6), b0 = P(7, 1.6, 9), b1 = P(26, 1, 9);
+      // отдача: оружие уходит назад и чуть задирается, кисти — вместе с ним
+      const rk = this.recoil * this.recoil * (3 - 2 * this.recoil);
+      const Pg = (u: number, v: number, z: number) => P(u - 4.5 * rk, v, z + 1.2 * rk * (u / 26));
+      const s0 = Pg(1, 2, 8.2), s1 = Pg(8, 2, 8.6), b0 = Pg(7, 1.6, 9), b1 = Pg(26, 1, 9);
       g.lineStyle(6, 0x1a120a).lineBetween(s0.x, s0.y, s1.x, s1.y);
       g.lineStyle(4, 0x6a4424).lineBetween(s0.x, s0.y, s1.x, s1.y); // приклад
       g.lineStyle(5, 0x111111).lineBetween(b0.x, b0.y, b1.x, b1.y);
       g.lineStyle(2.6, 0x4a4e54).lineBetween(b0.x, b0.y, b1.x, b1.y); // ствол
       sg.lineBetween(s0.x, s0.y, s1.x, s1.y).lineBetween(b0.x, b0.y, b1.x, b1.y);
-      const m = P(12, 2.6, 8.2);
+      const m = Pg(12, 2.6, 8.2);
       g.fillStyle(0x222222).fillRect(m.x - 1.5, m.y - 1.5, 3, 3); // магазин
       if (muzzle) {
-        const f = P(30, 1, 9);
+        const f = Pg(30, 1, 9);
         g.fillStyle(0xffd060, 0.9).fillCircle(f.x, f.y, 5).fillStyle(0xffffff, 0.95).fillCircle(f.x, f.y, 2.5);
       }
-      arm(1, 7, 2.6, 8.2);
-      arm(-1, 17, 1.2, 9);
+      arm(1, 7 - 4.5 * rk, 2.6, 8.2 + 0.3 * rk);
+      arm(-1, 17 - 4.5 * rk, 1.2, 9 + 0.8 * rk);
     } else {
       // зомби: руки вытянуты вперёд, слегка болтаются
       arm(-1, 15 + Math.sin(ph) * 1.5, -5 + sway * 2, 10);
@@ -197,6 +202,10 @@ interface Mate { id: string; hum: Humanoid; x: number; y: number; tx: number; ty
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
+/** роль и код в этой вкладке — чтобы после обновления страницы вернуться в ту же игру */
+const SAVE_KEY = "myzombika-net";
+const saveNet = (v: { role: "host" | "client"; code: string } | null) => { try { v ? sessionStorage.setItem(SAVE_KEY, JSON.stringify(v)) : sessionStorage.removeItem(SAVE_KEY); } catch { /* нет хранилища */ } };
+const loadNet = (): { role: "host" | "client"; code: string } | null => { try { return JSON.parse(sessionStorage.getItem(SAVE_KEY) || "null"); } catch { return null; } };
 const SITE = "https://myzombika.pion.ltd/";
 /** ссылка-приглашение: на сайте — его адрес, из файла на диске — адрес сайта */
 const inviteLink = (code: string) => `${location.protocol.startsWith("http") ? location.origin + location.pathname : SITE}?join=${code}`;
@@ -247,6 +256,8 @@ class Game extends Phaser.Scene {
   eid = 0; iid = 0; snapT = 0; inT = 0;
   /** промежуток между снимками хозяина (сглаженный), сек — за это время монстр проходит путь между точками */
   snapGap = 0.05; lastSnap = 0;
+  /** гость ждёт возвращения хозяина: своих монстров не заводим */
+  waitHost = false; waitUntil = 0;
   /** свой герой выбыл (в кооперативе — до следующей волны) */
   dead = false;
   netNades: Phaser.GameObjects.Image[] = [];
@@ -259,6 +270,7 @@ class Game extends Phaser.Scene {
 
   create() {
     Object.assign(S, { paused: false, hp: 100, grenades: 1, ammo: 30, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
+    this.lastSnap = 0; this.waitHost = false;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.booms = []; this.flowCell = -1;
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
@@ -989,13 +1001,15 @@ class Game extends Phaser.Scene {
     const dt = Math.min(0.05, dtMs / 1000);
     const cam = this.cameras.main;
     if (S.msgT > 0) S.msgT -= dt;
+    // гость ждёт хозяина; не вернулся за 25 с — играем одни
+    if (this.waitHost && performance.now() > this.waitUntil) { this.waitHost = false; saveNet(null); netLeave(); NET.status = "Хозяин не вернулся — играешь один"; this.scene.restart(); return; }
     this.updateGibs(dt);
     this.updateNades(dt);
     this.updateItems(dt);
     this.drawFx(dt);
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
     if (!document.hidden) this.updateLight(dt);
-    if (S.over) { this.aimG.clear(); return; }
+    if (S.over) { this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return; }
 
     // ── ходьба ──
     let mx = 0, my = 0;
@@ -1038,6 +1052,7 @@ class Game extends Phaser.Scene {
 
     if (this.dead || S.paused) firing = false;
     // ── стрельба ──
+    this.player.recoil = Math.max(0, this.player.recoil - dt * 11);
     this.fireT -= dt; this.emptyT -= dt; this.muzzleT -= dt; this.invul -= dt; this.hurtT -= dt;
     if (S.reload > 0) { S.reload -= dt; if (S.reload <= 0) { S.reload = 0; S.ammo = S.mag; } }
     if (firing && S.reload > 0 && this.emptyT <= 0) { this.emptyT = 0.35; sfx("empty", 0.7); }
@@ -1047,6 +1062,7 @@ class Game extends Phaser.Scene {
         S.ammo--;
         this.fireT = 0.1;
         this.muzzleT = 0.05;
+        this.player.recoil = 1;
         const a = this.aimA + (Math.random() - 0.5) * 0.06;
         const ca = Math.cos(this.aimA), sa = Math.sin(this.aimA);
         // пуля летит от героя (чтобы попадать и в упор), видна от дула; высота добавляется при отрисовке
@@ -1115,7 +1131,8 @@ class Game extends Phaser.Scene {
     this.bullets = this.bullets.filter((b) => b.life > 0);
 
     // ── враги ──
-    if (NET.role === "client") this.clientEnemies(dt);
+    if (this.waitHost) { /* ждём хозяина (см. начало update) */ }
+    else if (NET.role === "client") this.clientEnemies(dt);
     else this.hostEnemies(dt, cam);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
@@ -1257,48 +1274,85 @@ class Game extends Phaser.Scene {
     this.scene.restart();
   }
 
-  hostGame() {
+  hostGame(again?: string) {
     if (NET.role !== "solo") return;
-    S.msg = "Создаю игру…"; S.msgT = 2;
-    netHost().then((code) => {
+    S.msg = again ? "Восстанавливаю игру…" : "Создаю игру…"; S.msgT = 3;
+    netHost(again).then((code) => {
+      saveNet({ role: "host", code });
+      if (again) { S.msg = `Игра ${code} снова открыта — друзья подключатся сами`; S.msgT = 4; return; }
       copyText(inviteLink(code));
       S.msg = `Код для друга: ${code}\nссылка уже скопирована`; S.msgT = 6;
       if (S.paused) this.togglePause();
     }).catch(() => { S.msg = NET.status || "Не удалось создать игру"; S.msgT = 4; });
   }
 
-  joinGame(code?: string | null) {
+  /** retry — сколько ещё попыток (хозяин мог обновить страницу и вот-вот вернётся) */
+  joinGame(code?: string | null, retry = 0) {
     if (NET.role !== "solo") return;
     code = code ?? window.prompt("Код игры друга (5 знаков) или ссылка-приглашение:");
     if (!code) return;
     // можно вставить ссылку целиком — берём код из неё
     code = (code.match(/join=([A-Za-z0-9]{5})/)?.[1] ?? code).replace(/[^A-Za-z0-9]/g, "").slice(-5);
-    S.msg = "Подключаюсь…"; S.msgT = 3;
-    netJoin(code).then(() => {
+    S.msg = retry && this.waitHost ? "Хозяин отключился, жду его…" : "Подключаюсь…"; S.msgT = 3;
+    NET.status = "";
+    const c = code;
+    netJoin(c).then(() => {
+      this.waitHost = false;
+      saveNet({ role: "client", code: c });
       // мир теперь у хозяина: свои монстры и предметы убираем
       for (const e of this.enemies) e.c.destroy();
       for (const it of this.items) { it.img.destroy(); it.sh.destroy(); }
       for (const n of this.nades) { n.img.destroy(); n.sh.destroy(); }
       this.enemies = []; this.items = []; this.nades = []; this.spawnQ = [];
+      if (this.dead) this.revive();
       Object.assign(S, { hp: 100, grenades: 1, wave: 0, kills: 0, score: 0, over: false });
-      this.dead = false;
       S.msg = "Ты в игре у друга"; S.msgT = 2.5;
       if (S.paused) this.togglePause();
-    }).catch(() => { S.msg = NET.status || "Не удалось подключиться"; S.msgT = 4; });
+    }).catch(() => {
+      if (retry > 0 && (!this.waitHost || performance.now() < this.waitUntil)) { this.time.delayedCall(2000, () => this.joinGame(c, retry - 1)); return; }
+      if (this.waitHost) { this.waitHost = false; saveNet(null); this.scene.restart(); S.msg = "Хозяин не вернулся — играешь один"; S.msgT = 4; return; }
+      saveNet(null);
+      NET.status = `Игра ${c} не найдена`;
+      S.msg = NET.status; S.msgT = 4;
+    });
   }
 
   setupNet() {
     NET.onMsg = (from, m) => this.onNet(from, m);
     NET.onJoin = (id) => { this.sendHi(id); S.msg = "Друг подключился"; S.msgT = 2; };
     NET.onLeave = (id) => {
-      if (NET.role === "client") { netLeave(); S.msg = "Связь с хозяином потеряна"; S.msgT = 4; this.scene.restart(); return; }
+      if (NET.role === "client") { this.hostLost(); return; }
       const m = this.mates.get(id);
       if (m) { m.hum.c.destroy(); this.mates.delete(id); }
       S.msg = "Друг вышел"; S.msgT = 2;
+      this.checkAllDead();
     };
     if (NET.role === "host") for (const id of NET.conns.keys()) this.sendHi(id);
     if (NET.role === "client" && pendingHi) this.applyHi(pendingHi);
-    if (JOIN && !autoJoined && NET.role === "solo") { autoJoined = true; this.time.delayedCall(300, () => this.joinGame(JOIN)); }
+    // после обновления страницы — обратно в ту же игру; ссылка-приглашение — войти
+    if (!autoJoined && NET.role === "solo") {
+      autoJoined = true;
+      const saved = loadNet();
+      if (saved?.role === "host") this.time.delayedCall(300, () => this.hostGame(saved.code));
+      else if (saved?.role === "client") this.time.delayedCall(300, () => this.joinGame(saved.code, 10));
+      else if (JOIN) this.time.delayedCall(300, () => this.joinGame(JOIN, 1));
+    }
+  }
+
+  /** гость потерял хозяина (закрыл или обновляет страницу): ждём его ~20 с с тем же кодом */
+  hostLost() {
+    if (this.waitHost) return;
+    const code = NET.code;
+    netLeave();
+    this.waitHost = true;
+    // монстры хозяина замирают и исчезают
+    for (const e of this.enemies) e.c.destroy();
+    for (const it of this.items) { it.img.destroy(); it.sh.destroy(); }
+    for (const m of this.mates.values()) m.hum.c.destroy();
+    for (const n of this.netNades) n.destroy();
+    this.enemies = []; this.items = []; this.mates.clear(); this.netNades = [];
+    this.waitUntil = performance.now() + 25000;
+    this.joinGame(code, 10);
   }
 
   sendHi(id: string) {
@@ -1315,7 +1369,7 @@ class Game extends Phaser.Scene {
   mate(id: string, x: number, y: number) {
     let m = this.mates.get(id);
     if (!m) {
-      m = { id, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: 0 };
+      m = { id, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: performance.now() };
       this.mates.set(id, m);
     }
     return m;
@@ -1326,11 +1380,11 @@ class Game extends Phaser.Scene {
       if (m.t === "in") {
         const mt = this.mate(from, m.x, m.y);
         this.mateTarget(mt, m.x, m.y);
-        Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, seen: this.time.now });
+        Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, seen: performance.now() });
       } else if (m.t === "shot") {
         const mt = this.mates.get(from);
         if (!mt || mt.dead) return;
-        mt.muzzle = 0.06;
+        mt.muzzle = 0.06; mt.hum.recoil = 1;
         this.bullets.push({ x: m.x, y: m.y, dx: Math.cos(m.a), dy: Math.sin(m.a), life: 0.6, d: 0, bounces: 0 });
         sfx("shot", this.near(m.x, m.y) * 0.8);
         send({ t: "fx", k: "shot", who: from, x: m.x, y: m.y, a: m.a }, undefined, from);
@@ -1357,7 +1411,7 @@ class Game extends Phaser.Scene {
         if (m.k === "shot") {
           this.bullets.push({ x: m.x, y: m.y, dx: Math.cos(m.a), dy: Math.sin(m.a), life: 0.6, d: 0, bounces: 0, vis: true });
           const mt = this.mates.get(m.who);
-          if (mt) mt.muzzle = 0.06;
+          if (mt) { mt.muzzle = 0.06; mt.hum.recoil = 1; }
           sfx("shot", this.near(m.x, m.y) * 0.8);
         }
         break;
@@ -1367,6 +1421,10 @@ class Game extends Phaser.Scene {
 
   /** хозяин рассылает снимок мира, гость — свои движения */
   netTick(dt: number) {
+    const now = performance.now();
+    // пропал без «до свидания» (закрыл вкладку, отвалилась сеть) — через 6 с считаем ушедшим
+    if (NET.role === "host") for (const m of [...this.mates.values()]) if (now - m.seen > 6000) { netDrop(m.id); NET.onLeave(m.id); }
+    if (NET.role === "client" && this.lastSnap && now - this.lastSnap > 6000) { this.lastSnap = 0; this.hostLost(); return; }
     if (NET.role === "host" && NET.conns.size) {
       this.snapT -= dt;
       if (this.snapT > 0) return;
@@ -1486,6 +1544,7 @@ class Game extends Phaser.Scene {
       m.x = fx + (m.tx - fx) * u; m.y = fy + (m.ty - fy) * u;
       if (Math.hypot(m.tx - fx, m.ty - fy) > 200) { m.x = m.tx; m.y = m.ty; }
       m.muzzle -= dt;
+      m.hum.recoil = Math.max(0, m.hum.recoil - dt * 11);
       m.hum.c.setPosition(m.x, m.y).setDepth(m.y);
       if (!m.dead) m.hum.pose(m.aimA, m.moveA, m.ph, m.moving, m.muzzle > 0);
     }
