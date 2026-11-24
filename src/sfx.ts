@@ -2,7 +2,7 @@
 export type Sfx =
   | "shot" | "casing" | "empty" | "reload" | "hit" | "splat" | "gore" | "thunk" | "ricochet"
   | "step" | "hurt" | "groan" | "growl" | "squeak" | "roar" | "wave" | "over"
-  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate" | "beat" | "cricket" | "bird";
+  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate" | "beat" | "cricket" | "bird" | "thunder";
 
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
@@ -89,6 +89,24 @@ function voice(t: number, dur: number, vol: number, f0: number, f1: number, form
   o.start(t); lfo.start(t);
   o.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
   noise(t, dur, vol * 0.25, "bandpass", formant * 1.5, formant, 2, dur * 0.3); // хрип
+}
+
+/** шум дождя: бесконечный шум через фильтры, громкость плавно идёт к v (0..1) */
+let rainG: GainNode | null = null;
+export function setRain(v: number) {
+  const c = ctx;
+  if (!c || !out) return;
+  if (!rainG) {
+    if (v <= 0.01) return;
+    const s = c.createBufferSource(), hp = c.createBiquadFilter(), lp = c.createBiquadFilter();
+    s.buffer = noiseBuf; s.loop = true;
+    hp.type = "highpass"; hp.frequency.value = 500;
+    lp.type = "lowpass"; lp.frequency.value = 5200;
+    rainG = c.createGain(); rainG.gain.value = 0;
+    s.connect(hp).connect(lp).connect(rainG).connect(out);
+    s.start();
+  }
+  rainG.gain.setTargetAtTime(Math.max(0, Math.min(1, v)) * 0.09, c.currentTime, 0.4);
 }
 
 export function sfx(kind: Sfx, vol = 1) {
@@ -192,6 +210,12 @@ export function sfx(kind: Sfx, vol = 1) {
       tone(t, 0.9, 0.12 * v, "sawtooth", 110, 104, 0.15, 700);
       tone(t, 0.9, 0.08 * v, "sawtooth", 165, 156, 0.15, 700);
       tone(t + 0.5, 0.9, 0.1 * v, "sawtooth", 147, 139, 0.15, 700);
+      break;
+    case "thunder": // гром: треск, потом долгий рокот
+      noise(t, 0.25, 0.35 * v, "highpass", 2500, 900, 0.7, 0.01);
+      noise(t + 0.05, 2.6, 0.5 * v, "lowpass", 700, 60, 0.8, 0.15);
+      tone(t + 0.08, 1.8, 0.3 * v, "sine", 55, 30, 0.2);
+      noise(t + 0.6, 1.8, 0.25 * v, "lowpass", 400, 50, 0.8, 0.3);
       break;
     case "boom": // взрыв: удар, рокот, осыпь
       noise(t, 0.12, 0.9 * v, "lowpass", 6000, 1200);
