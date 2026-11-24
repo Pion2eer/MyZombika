@@ -426,3 +426,9 @@ export function armorVox(): Vox {
   });
   return m;
 }
+
+/** Обрубок: модель без нижних cut слоёв (ног), опущенная на землю — для ползущего зомби. */
+export function torsoOf(m: Vox, cut: number): Vox {
+  const per = m.n * m.n;
+  return { n: m.n, z: m.z - cut, z0: m.z0, c: m.c.slice(cut * per) };
+}

@@ -5,10 +5,11 @@
 import Phaser from "phaser";
 import { sfx, setSound, toggleMute, unlockAudio } from "./sfx";
 import { t, type Key } from "./i18n";
-import { settings, openMenu, closeMenu, menuOpen } from "./menu";
+import { settings, openMenu, closeMenu } from "./menu";
+import { buildHouse, hull, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
-import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, setPalette, type Palette } from "./heroStack";
+import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
 
 const W = 3000, H = 3000; // размер мира, px
 const VOX = 1.0, K = 3, DZ = 0.8, FRAMES = 64; // воксель = 1 px мира; атлас 64 поворота
@@ -62,11 +63,13 @@ export const S = (window as any).S = {
 
 // ───────── стопки срезов ─────────
 const origins: Record<string, { x: number; y: number }> = {};
-function makeStack(scene: Phaser.Scene, key: string, pal: Palette, part: "body" | "head") {
+/** слоёв ног у обрубка (ползущий зомби) */
+const CUT = 5;
+function makeStack(scene: Phaser.Scene, key: string, pal: Palette, part: "body" | "head" | "torso") {
   if (scene.textures.exists(key)) return;
   setPalette(pal);
-  const m = part === "body" ? heroBody() : heroHead(true);
-  const A = renderStack(m, { frames: FRAMES, k: K, dz: DZ, smooth: true, zTop: 32, w: part === "body" ? 31 : 21 });
+  const m = part === "body" ? heroBody() : part === "torso" ? torsoOf(heroBody(), CUT) : heroHead(true);
+  const A = renderStack(m, { frames: FRAMES, k: K, dz: DZ, smooth: true, zTop: part === "torso" ? 32 - CUT : 32, w: part === "head" ? 21 : 31 });
   const t = scene.textures.addCanvas(key, A.canvas)!;
   for (let f = 0; f < FRAMES; f++) t.add(f, 0, (f % A.cols) * A.fw, Math.floor(f / A.cols) * A.fh, A.fw, A.fh);
   origins[key] = { x: A.ox / A.fw, y: A.oy / A.fh };
@@ -89,6 +92,11 @@ const PAL_MATE: Palette = {
 };
 /** в бронежилете: безрукавка становится оливковым жилетом с тёмными ремнями */
 const withVest = (p: Palette): Palette => ({ ...p, FUR: [0x56613a, 0x4a5530, 0x3f482b], LACE: 0x22221c, BRASS: 0x8a8a70 });
+/** метатель: раздутый, желтушная кожа, лиловое тряпьё */
+const PAL_ZOMBIE_C: Palette = {
+  ...PAL_ZOMBIE_A,
+  SKIN: 0xb0b25a, SKIN_SH: 0x8a8c40, FUR: [0x6a4a6e, 0x5a3e5e, 0x4a3250], FUR_DARK: [0x3e2a40, 0x342236, 0x4a3046], LACE: 0x8a2a24, EYE: 0xffd030, EYE_WHITE: 0xff8020,
+};
 const frameOf = (a: number) => ((Math.round((a / TAU) * FRAMES) % FRAMES) + FRAMES) % FRAMES;
 
 /** Человечек из срезов: тень, ступни, руки, тело, голова (+ оружие у героя). */
@@ -114,6 +122,8 @@ class Humanoid {
   /** что в руках (у людей) */
   weapon: WeaponId = "rifle";
   armored = false;
+  /** ползёт без ног: тело опущено на CUT слоёв */
+  crawl = false;
   constructor(scene: Phaser.Scene, x: number, y: number, public skin: string, public pal: Palette, public gun: boolean) {
     const bk = `${skin}_body`, hk = `${skin}_head`;
     // тень под ногами — мягкая, того же вида, что и длинная (одна тень, а не две разные)
@@ -145,13 +155,14 @@ class Humanoid {
       const side = i ? 1 : -1, st = Math.sin(ph) * 5.5 * side * moving;
       f.setPosition(Math.cos(fa) * st - Math.sin(fa) * side * 4.5, Math.sin(fa) * st + Math.cos(fa) * side * 4.5 + 1).setRotation(fa);
     });
-    const P = (u: number, v: number, z: number) => ({ x: u * Math.cos(a) - v * Math.sin(a), y: u * Math.sin(a) + v * Math.cos(a) + lift(z) });
+    const drop = this.crawl ? CUT : 0;
+    const P = (u: number, v: number, z: number) => ({ x: u * Math.cos(a) - v * Math.sin(a), y: u * Math.sin(a) + v * Math.cos(a) + lift(z - drop) });
     this.back.clear();
     this.front.clear();
     const skin = this.pal.SKIN;
     const arm = (side: number, hu: number, hv: number, hz: number) => {
       const s = P(0.3, side * ARM_V * VOX, ARM_Z), h = P(hu, hv, hz);
-      const g = s.y < lift(ARM_Z) - 0.5 ? this.back : this.front; // дальнее плечо — за телом
+      const g = s.y < lift(ARM_Z - drop) - 0.5 ? this.back : this.front; // дальнее плечо — за телом
       if (!this.armsOn[side > 0 ? 1 : 0]) {
         g.fillStyle(0x2e1410).fillCircle(s.x, s.y, 3.2).fillStyle(0x8a1a14).fillCircle(s.x, s.y, 2.2);
         return;
@@ -228,6 +239,16 @@ class Humanoid {
       }
       arm(1, 7 - 4.5 * rk, 2.6, 8.2 + 0.3 * rk);
       arm(-1, 17 - 4.5 * rk, 1.2, 9 + 0.8 * rk);
+    } else if (this.crawl) {
+      // ползёт: руки по очереди тянутся вперёд и подтягивают обрубок
+      const k = Math.sin(ph * 0.6);
+      arm(-1, 13 + k * 6, -7, CUT + 1.5 + Math.max(0, k) * 2);
+      arm(1, 13 - k * 6, 7, CUT + 1.5 + Math.max(0, -k) * 2);
+    } else if (this.recoil > 0) {
+      // замах: правая рука с куском над головой уходит вперёд
+      const r = this.recoil;
+      arm(-1, 13, -5, 10);
+      arm(1, 2 + 16 * (1 - r), 6, 16 - 5 * (1 - r));
     } else {
       // зомби: руки вытянуты вперёд, слегка болтаются
       arm(-1, 15 + Math.sin(ph) * 1.5, -5 + sway * 2, 10);
@@ -238,6 +259,20 @@ class Humanoid {
     for (const im of [this.body, this.head]) on ? im.setTintFill(0xffffff) : im.clearTint();
   }
   /** надеть/снять бронежилет (другая стопка тела) */
+  /** ноги оторваны: тело-обрубок на земле, голова ниже, ступней нет */
+  setCrawl() {
+    if (this.crawl) return;
+    const key = `${this.skin}T_body`;
+    if (!this.body.scene.textures.exists(key)) return;
+    this.crawl = true;
+    const f = this.body.frame.name;
+    this.body.setTexture(key, f).setOrigin(origins[key].x, origins[key].y);
+    this.sBody.setTexture(key, f).setOrigin(origins[key].x, 1 - origins[key].y);
+    const dy = -lift(CUT);
+    this.head.setY(dy); this.sHead.setY(-dy);
+    for (const ft of this.feet) ft.setVisible(false);
+    this.contact.setDisplaySize(30, 14);
+  }
   setArmor(on: boolean) {
     if (on === this.armored) return;
     const key = on ? `${this.skin}A_body` : `${this.skin}_body`;
@@ -249,7 +284,7 @@ class Humanoid {
 }
 
 // ───────── враги ─────────
-type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear";
+type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter";
 const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; score: number; sprite?: string; size?: number; mass: number; blood: number }> = {
   zombie: { hp: 4, speed: 50, r: 11, dmg: 12, score: 10, mass: 1, blood: 0x5a7a2a },
   runner: { hp: 3, speed: 92, r: 11, dmg: 10, score: 15, mass: 1, blood: 0x5a7a2a },
@@ -257,6 +292,8 @@ const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; s
   hyena: { hp: 3, speed: 150, r: 11, dmg: 8, score: 15, sprite: "scavenger", size: 58, mass: 1, blood: 0x8a1010 },
   panther: { hp: 5, speed: 185, r: 12, dmg: 12, score: 25, sprite: "shadowcat", size: 66, mass: 1.2, blood: 0x6a0c0c },
   bear: { hp: 30, speed: 62, r: 28, dmg: 30, score: 100, sprite: "giant", size: 120, mass: 6, blood: 0x6a0c0c },
+  /** метатель: медленный, держится поодаль и кидается кусками своего тела */
+  spitter: { hp: 8, speed: 34, r: 12, dmg: 10, score: 30, mass: 1.5, blood: 0x7a1010 },
 };
 interface Enemy {
   kind: Kind; x: number; y: number; kx: number; ky: number; hp: number; a: number; ph: number; cool: number; hitT: number;
@@ -271,24 +308,26 @@ interface Enemy {
   fx?: number; fy?: number; iu?: number;
   /** текущее направление хода (плавно поворачивается к нужному) */
   hx: number; hy: number;
+  /** метатель: через сколько бросок */
+  throwT?: number;
   /** проверка «застрял»: где был и сколько ждать до проверки */
   sx: number; sy: number; st: number; side: number; sideT: number;
 }
 /** шанс выпадения: [граната, аптечка, бронежилет] */
-const DROP: Record<Kind, [number, number, number]> = { zombie: [0.07, 0.06, 0.025], runner: [0.09, 0.07, 0.035], rat: [0.03, 0.05, 0], hyena: [0.1, 0.08, 0.05], panther: [0.15, 0.1, 0.1], bear: [0.8, 0.8, 0.6] };
+const DROP: Record<Kind, [number, number, number]> = { zombie: [0.07, 0.06, 0.025], runner: [0.09, 0.07, 0.035], rat: [0.03, 0.05, 0], hyena: [0.1, 0.08, 0.05], panther: [0.15, 0.1, 0.1], bear: [0.8, 0.8, 0.6], spitter: [0.12, 0.1, 0.06] };
 type ItemKind = "grenade" | "medkit" | "armor";
 const ITEM_KINDS: ItemKind[] = ["grenade", "medkit", "armor"];
 interface Item { id: number; kind: ItemKind; x: number; y: number; z: number; vz: number; t: number; life: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 interface Nade { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number; spin: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 /** высота для длины тени, px */
-const HEIGHT: Record<Kind, number> = { zombie: 30, runner: 30, rat: 6, hyena: 14, panther: 16, bear: 36 };
+const HEIGHT: Record<Kind, number> = { zombie: 30, runner: 30, rat: 6, hyena: 14, panther: 16, bear: 36, spitter: 30 };
 /** отлетевший кусок: летит по дуге (z — высота), подпрыгивает, остаётся лежать и тает */
 interface Gib {
   o: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Ellipse; x: number; y: number; z: number; vx: number; vy: number; vz: number; vr: number;
   life: number; rest: boolean; blood: number | null; casing: boolean; trail: number;
 }
 const MEAT = [0x6a1a14, 0x8a2a20, 0x4a0e0a, 0xa0443a];
-const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar" };
+const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan" };
 interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number }
 /** где у дерева на картинке основание ствола (доля высоты): картинка ставится основанием в точку ствола */
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
@@ -299,7 +338,9 @@ function shotBullets(w: WeaponDef, x: number, y: number, as: number[], vis: bool
 }
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
 interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number; w: number; armor: number; med: number }
-const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
+const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear", "spitter"];
+/** летящий кусок плоти (от метателя): дуга, за ним капает кровь */
+interface Spit { x: number; y: number; z: number; vx: number; vy: number; vz: number; drip: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image; vis: boolean }
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
 /** роль и код в этой вкладке — чтобы после обновления страницы вернуться в ту же игру */
@@ -336,21 +377,28 @@ class Game extends Phaser.Scene {
   keys!: Record<string, Phaser.Input.Keyboard.Key>;
   enemies: Enemy[] = [];
   obs: Ob[] = [];
+  /** дом и его стены (прямоугольники) */
+  house?: House;
+  walls: WallBox[] = [];
   bullets: Bullet[] = [];
   bg!: Phaser.GameObjects.Graphics;
   aimG!: Phaser.GameObjects.Graphics;
   blood!: Phaser.GameObjects.Particles.ParticleEmitter;
+  /** скорость своего героя (для упреждения бросков) */
+  pvx = 0; pvy = 0;
   fireT = 0; muzzleT = 0; invul = 0; hurtT = 0; emptyT = 0;
   gibs: Gib[] = [];
   light!: Lighting;
   eyes!: Phaser.GameObjects.Graphics;
   items: Item[] = [];
   nades: Nade[] = [];
+  spits: Spit[] = [];
   booms: { x: number; y: number; t: number }[] = [];
   /** вспышки взрывов и свечение предметов (светятся и ночью) */
   boomG!: Phaser.GameObjects.Graphics;
   /** общая текстура длинных теней людей и зверей (рисуется целиком одной прозрачностью, как у деревьев) */
   actSh!: Phaser.GameObjects.RenderTexture;
+  wallShG?: Phaser.GameObjects.Graphics;
   splats: Phaser.GameObjects.Ellipse[] = [];
   spawnQ: Kind[] = []; spawnT = 0; waveT = 2;
   mouse = { x: 0, y: 0 };
@@ -372,8 +420,8 @@ class Game extends Phaser.Scene {
 
   create() {
     Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
-    this.lastSnap = 0; this.waitHost = false;
-    this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.booms = []; this.flowCell = -1;
+    this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
+    this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
     makeStack(this, "hero_head", PAL_HERO, "head");
@@ -383,6 +431,10 @@ class Game extends Phaser.Scene {
     makeStack(this, "zB_head", PAL_ZOMBIE_B, "head");
     makeStack(this, "mate_body", PAL_MATE, "body");
     makeStack(this, "mate_head", PAL_MATE, "head");
+    makeStack(this, "zC_body", PAL_ZOMBIE_C, "body");
+    makeStack(this, "zC_head", PAL_ZOMBIE_C, "head");
+    makeStack(this, "zAT_body", PAL_ZOMBIE_A, "torso");
+    makeStack(this, "zBT_body", PAL_ZOMBIE_B, "torso");
     makeStack(this, "heroA_body", withVest(PAL_HERO), "body");
     makeStack(this, "mateA_body", withVest(PAL_MATE), "body");
     makeItem(this, "it_armor", armorVox(), 18, 0.6);
@@ -541,8 +593,13 @@ class Game extends Phaser.Scene {
     const ground = this.add.tileSprite(0, 0, W, H, "ground_meadow").setOrigin(0).setTileScale(0.4).setDepth(-10);
     void ground;
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
+    // полуразрушенный дом недалеко от старта
+    this.house = buildHouse(this, W / 2 + 110, H / 2 - 250);
+    this.walls = this.house.walls;
+    const hs = this.house;
     const free = (x: number, y: number, r: number) =>
-      Math.hypot(x - W / 2, y - H / 2) > 220 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40);
+      Math.hypot(x - W / 2, y - H / 2) > 220 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
+      !(x > hs.x - r - 50 && x < hs.x + hs.w + r + 50 && y > hs.y - r - 60 && y < hs.y + hs.h + r + 40);
     const place = (key: string, x: number, y: number, size: number, r: number, canopy: number) => {
       const img = this.add.image(x, y, key).setDisplaySize(size, size).setDepth(y);
       // дерево нарисовано «вид сверху-сбоку»: ставим картинку основанием ствола в точку (x, y)
@@ -563,9 +620,11 @@ class Game extends Phaser.Scene {
     }
     // мелочь без столкновений
     for (let i = 0; i < 420; i++) {
+      const dx = rnd.between(0, W), dy = rnd.between(0, H);
+      if (dx > hs.x - 10 && dx < hs.x + hs.w + 10 && dy > hs.y - 10 && dy < hs.y + hs.h + 10) continue;
       const key = rnd.pick(["grass_1", "grass_2", "grass_1", "flowers_1", "flowers_2", "flowers_3", "bush_red_full", "bush_blue_full", "stone", "stone_2", "grass_2", "flowers_1"]);
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
-      this.add.image(rnd.between(0, W), rnd.between(0, H), key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
+      this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
     }
   }
 
@@ -589,6 +648,14 @@ class Game extends Phaser.Scene {
       for (let j = Math.max(0, Math.floor((o.y - R) / C)); j <= Math.min(n - 1, Math.floor((o.y + R) / C)); j++)
         for (let i = Math.max(0, Math.floor((o.x - R) / C)); i <= Math.min(n - 1, Math.floor((o.x + R) / C)); i++)
           if (Math.hypot((i + 0.5) * C - o.x, (j + 0.5) * C - o.y) < R) this.blocked[j * n + i] = 1;
+    }
+    // стены дома (с тем же запасом)
+    for (const w of this.walls) {
+      for (let j = Math.max(0, Math.floor((w.y0 - 13) / C)); j <= Math.min(n - 1, Math.floor((w.y1 + 13) / C)); j++)
+        for (let i = Math.max(0, Math.floor((w.x0 - 13) / C)); i <= Math.min(n - 1, Math.floor((w.x1 + 13) / C)); i++) {
+          const cx = (i + 0.5) * C, cy = (j + 0.5) * C;
+          if (Math.hypot(cx - Phaser.Math.Clamp(cx, w.x0, w.x1), cy - Phaser.Math.Clamp(cy, w.y0, w.y1)) < 13) this.blocked[j * n + i] = 1;
+        }
     }
   }
   /** Дейкстра от клетки героя (8 соседей, без срезания углов у препятствий) */
@@ -659,6 +726,18 @@ class Game extends Phaser.Scene {
       const t = Phaser.Math.Clamp(((o.x - x) * dx + (o.y - y) * dy) / L2, 0, 1);
       if (Math.hypot(x + dx * t - o.x, y + dy * t - o.y) < m) return false;
     }
+    // стены: отрезок против прямоугольника, раздутого на r
+    for (const w of this.walls) {
+      const m = r + 3;
+      let t0 = 0, t1 = 1;
+      const ok = ([[-dx, x - (w.x0 - m)], [dx, w.x1 + m - x], [-dy, y - (w.y0 - m)], [dy, w.y1 + m - y]] as const).every(([pp, q]) => {
+        if (pp === 0) return q >= 0;
+        const tt = q / pp;
+        if (pp < 0) t0 = Math.max(t0, tt); else t1 = Math.min(t1, tt);
+        return t0 <= t1;
+      });
+      if (ok && t0 <= t1) return false;
+    }
     return true;
   }
   /** куда идти по сетке: точка на 2–3 клетки вперёд по убыванию расстояния */
@@ -697,6 +776,15 @@ class Game extends Phaser.Scene {
     for (const o of this.obs) {
       const dx = x - o.x, dy = y - o.y, d = Math.hypot(dx, dy), m = o.r + r;
       if (d < m && d > 0.01) { x = o.x + (dx / d) * m; y = o.y + (dy / d) * m; }
+    }
+    for (const w of this.walls) {
+      const cx = Phaser.Math.Clamp(x, w.x0, w.x1), cy = Phaser.Math.Clamp(y, w.y0, w.y1);
+      const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+      if (d >= r) continue;
+      if (d > 0.01) { x = cx + (dx / d) * r; y = cy + (dy / d) * r; continue; }
+      // центр внутри стены: выталкиваем к ближайшему краю
+      const e = [x - w.x0, w.x1 - x, y - w.y0, w.y1 - y], k = e.indexOf(Math.min(...e));
+      if (k === 0) x = w.x0 - r; else if (k === 1) x = w.x1 + r; else if (k === 2) y = w.y0 - r; else y = w.y1 + r;
     }
     return { x: Phaser.Math.Clamp(x, 40, W - 40), y: Phaser.Math.Clamp(y, 40, H - 40) };
   }
@@ -754,6 +842,7 @@ class Game extends Phaser.Scene {
     if (n >= 3) for (let i = 0; i < n - 1; i++) q.push("hyena");
     if (n >= 4) for (let i = 0; i < n - 3; i++) q.push("panther");
     if (n >= 5) for (let i = 0; i < Math.floor((n - 3) / 2); i++) q.push("bear");
+    if (n >= 3) for (let i = 0; i < Math.floor(n / 2); i++) q.push("spitter");
     Phaser.Utils.Array.Shuffle(q);
     this.spawnQ = q;
     S.msg = t("wave_n", { n });
@@ -769,7 +858,9 @@ class Game extends Phaser.Scene {
       const v = this.cameras.main.worldView, a = Math.random() * TAU, d = Math.hypot(v.width, v.height) / 2 + 40 + Math.random() * 150;
       x = Phaser.Math.Clamp(this.px + Math.cos(a) * d, 60, W - 60);
       y = Phaser.Math.Clamp(this.py + Math.sin(a) * d, 60, H - 60);
-      if (Math.hypot(x - this.px, y - this.py) > 300 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + K_.r + 4)) break;
+      const hs = this.house!;
+      const inHouse = x > hs.x - 30 && x < hs.x + hs.w + 30 && y > hs.y - 30 && y < hs.y + hs.h + 30;
+      if (!inHouse && Math.hypot(x - this.px, y - this.py) > 300 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + K_.r + 4)) break;
     }
     this.addEnemy(kind, x, y, this.eid++);
   }
@@ -783,7 +874,9 @@ class Game extends Phaser.Scene {
       e.img = this.add.image(0, 0, K_.sprite).setDisplaySize(K_.size!, K_.size!).setTint(0xd8e0c8);
       e.c = this.add.container(x, y, [sh, e.img]);
     } else {
-      e.hum = new Humanoid(this, x, y, kind === "zombie" ? "zA" : "zB", kind === "zombie" ? PAL_ZOMBIE_A : PAL_ZOMBIE_B, false);
+      const [sk, pal] = kind === "zombie" ? ["zA", PAL_ZOMBIE_A] as const : kind === "spitter" ? ["zC", PAL_ZOMBIE_C] as const : ["zB", PAL_ZOMBIE_B] as const;
+      e.hum = new Humanoid(this, x, y, sk, pal, false);
+      if (kind === "spitter") e.throwT = rand(1.5, 3);
       e.c = e.hum.c;
       e.cast = e.hum.cast;
     }
@@ -853,6 +946,12 @@ class Game extends Phaser.Scene {
     for (const o of this.obs) if (Math.abs(o.x - this.px) < reach + o.r && Math.abs(o.y - this.py) < reach + o.r) occ.push({ x: o.x, y: o.y, r: o.r, obj: o.img });
     for (const e of this.enemies) if (!e.dead) occ.push({ x: e.x, y: e.y, r: KINDS[e.kind].r * 0.8, obj: e.c });
     for (const m of this.mates.values()) occ.push({ x: m.x, y: m.y, r: 9, obj: m.hum.c });
+    // стены дома для фонаря — цепочки кругов
+    for (const w of this.walls) {
+      if (w.x1 < this.px - reach || w.x0 > this.px + reach || w.y1 < this.py - reach || w.y0 > this.py + reach) continue;
+      const len = Math.max(w.x1 - w.x0, w.y1 - w.y0), n = Math.max(1, Math.round(len / 7));
+      for (let i = 0; i <= n; i++) occ.push({ x: w.x0 + ((w.x1 - w.x0) * i) / n, y: w.y0 + ((w.y1 - w.y0) * i) / n, r: 4.5 });
+    }
     const alive = !S.over;
     // время суток из настроек (у гостя — как у хозяина)
     if (NET.role !== "client" && settings.daynight !== "cycle") L.t = Math.floor(L.t) + (settings.daynight === "day" ? 0.25 : 0.72);
@@ -906,6 +1005,17 @@ class Game extends Phaser.Scene {
       }
     }
     rt.endDraw();
+    // тени стен дома от солнца: прямоугольник + он же, сдвинутый по солнцу на высоту стены
+    if (settings.quality !== "low" && !flashSh && SHADOW_ALPHA * sun.day > 0.01 && this.walls.length) {
+      const g = (this.wallShG ??= this.make.graphics({}, false)).clear().fillStyle(0x000000);
+      for (const w of this.walls) {
+        if (!onView((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2)) continue;
+        const d = w.h * sun.len * SHADOW, sx = Math.cos(sun.ang) * d, sy = Math.sin(sun.ang) * d;
+        const pts = [{ x: w.x0, y: w.y0 }, { x: w.x1, y: w.y0 }, { x: w.x1, y: w.y1 }, { x: w.x0, y: w.y1 }];
+        g.fillPoints(hull([...pts, ...pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))]).map((q) => ({ x: q.x - ox, y: q.y - oy })), true);
+      }
+      rt.draw(g);
+    }
     rt.setAlpha(shA).setVisible(shA > 0.01);
     // пятно под ногами: ночью заметнее (днём есть длинная тень)
     const ct = 0.14 + 0.16 * night;
@@ -1018,10 +1128,11 @@ class Game extends Phaser.Scene {
   }
 
   /** ранение монстра без смерти: ошмётки, иногда отрывает руку; хозяин рассылает гостям */
-  hitFx(e: Enemy, dir: number, n: number, force: number, arm: number) {
+  hitFx(e: Enemy, dir: number, n: number, force: number, arm: number, legs = false) {
     this.chunks(e, dir, n, force);
     if (arm >= 0 && e.hum) this.tearArm(e, arm, dir, force > 1 ? 1.5 : 1);
-    if (NET.role === "host") send({ t: "hit", id: e.id, dir, n, f: force, arm });
+    if (legs && e.hum && !e.hum.crawl) this.makeCrawler(e, dir);
+    if (NET.role === "host") send({ t: "hit", id: e.id, dir, n, f: force, arm, legs: legs ? 1 : 0 });
   }
 
   // ───────── предметы и гранаты ─────────
@@ -1116,6 +1227,65 @@ class Game extends Phaser.Scene {
       if (n.t <= 0) { this.explode(n.x, n.y); n.img.destroy(); n.sh.destroy(); }
     }
     this.nades = this.nades.filter((n) => n.t > 0);
+  }
+
+  /** метатель бросает кусок плоти по дуге в точку (tx, ty); хозяин рассылает бросок гостям */
+  throwSpit(id: number, x: number, y: number, tx: number, ty: number) {
+    const d = Math.hypot(tx - x, ty - y), T = 0.55 + d / 700, z0 = 16;
+    const m = { x, y, z: z0, vx: (tx - x) / T, vy: (ty - y) / T, vz: (0.5 * 600 * T * T - z0) / T };
+    if (NET.role === "host") send({ t: "spit", id, ...m });
+    this.spawnSpit(m.x, m.y, m.z, m.vx, m.vy, m.vz, false);
+    sfx("splat", this.near(x, y) * 0.8);
+  }
+  spawnSpit(x: number, y: number, z: number, vx: number, vy: number, vz: number, vis: boolean) {
+    const img = this.add.image(x, y - z, "gib_chunk").setTint(Phaser.Utils.Array.GetRandom(MEAT)).setScale(1.5).setDepth(1e6 - 2);
+    const sh = this.add.image(x, y, "lt_cast").setDisplaySize(12, 7).setAlpha(0.3).setDepth(-3.5);
+    this.spits.push({ x, y, z, vx, vy, vz, drip: 0, img, sh, vis });
+  }
+  updateSpits(dt: number) {
+    for (const s of this.spits) {
+      s.vz -= 600 * dt; s.z += s.vz * dt; s.x += s.vx * dt; s.y += s.vy * dt;
+      s.img.setPosition(s.x, s.y - s.z).setRotation(s.img.rotation + dt * 9);
+      s.sh.setPosition(s.x, s.y + 1).setAlpha(0.3 * Math.max(0.3, 1 - s.z / 90));
+      // капли крови по пути: падают на землю пятнышками
+      s.drip -= dt;
+      if (s.drip <= 0) {
+        s.drip = 0.035;
+        this.blood.setParticleTint(0x8a1010);
+        this.blood.emitParticleAt(s.x, s.y - s.z, 1);
+        if (Math.random() < 0.55) this.splat(s.x + rand(-3, 3), s.y + rand(-3, 3), 0x7a1010, rand(1, 2.2));
+      }
+      if (s.z <= 0) {
+        // шлепок: лужица, брызги, урон тем, кто рядом (считает хозяин)
+        this.blood.setParticleTint(0x8a1010);
+        this.blood.explode(14, s.x, s.y - 3);
+        for (let i = 0; i < 4; i++) this.splat(s.x + rand(-9, 9), s.y + rand(-6, 6), 0x7a1010, rand(2.5, 5));
+        this.gib("gib_chunk", Phaser.Utils.Array.GetRandom(MEAT), s.x, s.y, 2, rand(0, TAU), rand(20, 60), rand(40, 90), { scale: 0.9, blood: 0x7a1010 });
+        sfx("splat", this.near(s.x, s.y));
+        if (!s.vis && NET.role !== "client") {
+          if (!this.dead && Math.hypot(this.px - s.x, this.py - s.y) < 24 && this.invul <= 0) this.hurtPlayer(KINDS.spitter.dmg);
+          for (const m of this.mates.values()) if (!m.dead && Math.hypot(m.x - s.x, m.y - s.y) < 24) this.hurtMate(m, KINDS.spitter.dmg);
+        }
+        s.img.destroy(); s.sh.destroy();
+      }
+    }
+    this.spits = this.spits.filter((s) => s.z > 0);
+  }
+
+  /** зомби теряет ноги и дальше ползёт (ноги отлетают с кровью) */
+  makeCrawler(e: Enemy, dir: number) {
+    const h = e.hum;
+    if (!h || h.crawl) return;
+    h.setCrawl();
+    const K_ = KINDS[e.kind];
+    this.blood.setParticleTint(K_.blood);
+    this.blood.explode(18, e.x, e.y - 3);
+    for (const side of [-1, 1]) {
+      const c = h.pal.FUR_DARK[0];
+      this.gib("gib_arm", c, e.x - Math.sin(e.a) * side * 4, e.y + Math.cos(e.a) * side * 4, 4, dir + side * rand(0.4, 1.1), rand(90, 170), rand(140, 220), { blood: K_.blood, life: rand(10, 14) });
+    }
+    for (let i = 0; i < 4; i++) this.splat(e.x + rand(-10, 10), e.y + rand(-8, 8), K_.blood, rand(3, 6));
+    sfx("gore", this.near(e.x, e.y));
   }
 
   explode(x: number, y: number) {
@@ -1218,6 +1388,7 @@ class Game extends Phaser.Scene {
     if (this.waitHost && performance.now() > this.waitUntil) { this.waitHost = false; saveNet(null); netLeave(); NET.status = t("host_gone"); this.scene.restart(); return; }
     this.updateGibs(dt);
     this.updateNades(dt);
+    this.updateSpits(dt);
     this.updateItems(dt);
     this.drawFx(dt);
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
@@ -1241,6 +1412,7 @@ class Game extends Phaser.Scene {
     const spd = 175;
     const p = this.collide(this.px + mx * spd * dt, this.py + my * spd * dt, 10);
     const went = Math.hypot(p.x - this.px, p.y - this.py);
+    this.pvx = (p.x - this.px) / dt; this.pvy = (p.y - this.py) / dt;
     this.px = p.x; this.py = p.y;
     this.moving = Phaser.Math.Linear(this.moving, Math.min(1, went / (spd * dt + 1e-6)), 0.25);
     if (ml > 0.1) this.moveA = Math.atan2(my, mx);
@@ -1309,6 +1481,14 @@ class Game extends Phaser.Scene {
     for (const b of this.bullets) {
       const step = BS * dt;
       let hit = false;
+      // стены дома: пуля застревает в досках
+      if (b.d > 0) for (const w of this.walls) if (b.x > w.x0 && b.x < w.x1 && b.y > w.y0 && b.y < w.y1) {
+        hit = true;
+        sfx("thunk", this.near(b.x, b.y) * 0.8);
+        this.blood.setParticleTint(0x7a5432);
+        this.blood.explode(4, b.x - b.dx * 3, b.y - b.dy * 3 + gunZ);
+        break;
+      }
       for (const o of this.obs) if (!hit && b.d > 0 && Math.hypot(b.x - o.x, b.y - o.y) < o.r * 0.9) {
         if (!o.canopy && b.bounces < 2) {
           // камень: рикошет — отражаем от поверхности, с разбросом, пуля теряет скорость жизни
@@ -1344,7 +1524,12 @@ class Game extends Phaser.Scene {
           sfx("hit", this.near(e.x, e.y));
           const dir = Math.atan2(b.dy, b.dx);
           if (e.hp <= 0) this.kill(e, dir);
-          else this.hitFx(e, dir, e.kind === "bear" ? 2 : 1, 0.8, e.hum && Math.random() < 0.3 ? (Math.random() < 0.5 ? 0 : 1) : -1);
+          else {
+            // иногда пули перебивают ноги — дальше ползёт
+            const legs = (e.kind === "zombie" || e.kind === "runner") && !e.hum!.crawl && e.hp <= KINDS[e.kind].hp * 0.6 && Math.random() < 0.3;
+            if (legs) this.makeCrawler(e, dir);
+            this.hitFx(e, dir, e.kind === "bear" ? 2 : 1, 0.8, e.hum && Math.random() < 0.3 ? (Math.random() < 0.5 ? 0 : 1) : -1, legs);
+          }
           break;
         }
       }
@@ -1360,6 +1545,11 @@ class Game extends Phaser.Scene {
     else this.hostEnemies(dt, cam);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
+    // ── крыша дома: прозрачная, пока ты внутри ──
+    if (this.house) {
+      const hs = this.house, inside = this.px > hs.x && this.px < hs.x + hs.w && this.py > hs.y && this.py < hs.y + hs.h + 4;
+      hs.roof.setAlpha(Phaser.Math.Linear(hs.roof.alpha, inside ? 0.1 : 1, 0.15));
+    }
     // ── кроны деревьев: прозрачные, если под ними кто-то есть ──
     for (const o of this.obs) {
       if (!o.canopy) continue;
@@ -1448,7 +1638,10 @@ class Game extends Phaser.Scene {
       const turn = Math.min(1, dt * (e.hx || e.hy ? 7 : 100));
       e.hx += (ux - e.hx) * turn; e.hy += (uy - e.hy) * turn;
       const hl = Math.hypot(e.hx, e.hy) || 1;
-      let vx = (e.hx / hl) * K_.speed, vy = (e.hy / hl) * K_.speed;
+      // ползущий — медленно; метатель на дистанции броска почти стоит
+      const throwing = e.kind === "spitter" && d < 300 && d > 110 && direct;
+      const spd = K_.speed * (e.hum?.crawl ? 0.4 : 1) * (throwing ? 0.15 : 1);
+      let vx = (e.hx / hl) * spd, vy = (e.hy / hl) * spd;
       // не слипаться друг с другом
       for (const o of live) {
         if (o === e) continue;
@@ -1461,12 +1654,29 @@ class Game extends Phaser.Scene {
       e.st -= dt;
       if (e.st <= 0) {
         // за 0.6 с прошёл меньше трети положенного (и герой не рядом) — застрял
-        if (Math.hypot(e.x - e.sx, e.y - e.sy) < K_.speed * 0.6 * 0.3 && d > K_.r + 30 && e.sideT <= 0) { e.side = Math.random() < 0.5 ? 1 : -1; e.sideT = 0.7; }
+        if (Math.hypot(e.x - e.sx, e.y - e.sy) < spd * 0.6 * 0.3 && d > K_.r + 30 && !throwing && e.sideT <= 0) { e.side = Math.random() < 0.5 ? 1 : -1; e.sideT = 0.7; }
         e.sx = e.x; e.sy = e.y; e.st = 0.6;
       }
       const moved = Math.hypot(q.x - e.x, q.y - e.y);
       e.x = q.x; e.y = q.y;
-      e.ph += moved * (e.hum ? 0.12 : 0.25);
+      e.ph += moved * (e.hum ? (e.hum.crawl ? 0.3 : 0.12) : 0.25);
+      // ползущий оставляет кровавый след
+      if (e.hum?.crawl && Math.random() < moved * 0.08) this.splat(e.x - Math.cos(e.a) * 8, e.y - Math.sin(e.a) * 8, K_.blood, rand(2, 3.5));
+      // метатель: бросок куском в цель
+      if (e.kind === "spitter" && T.length) {
+        e.throwT = (e.throwT ?? 2) - dt;
+        if (e.hum) e.hum.recoil = Math.max(0, e.hum.recoil - dt * 2.5);
+        if (e.throwT <= 0.4 && e.hum && e.hum.recoil === 0 && throwing) e.hum.recoil = 1; // замах
+        if (e.throwT <= 0) {
+          e.throwT = rand(2.4, 3.4);
+          if (throwing) {
+            // с упреждением: туда, где цель будет к падению
+            const m = tg.mate, tv = m ? { x: (m.tx - (m.fx ?? m.tx)) / m.gap, y: (m.ty - (m.fy ?? m.ty)) / m.gap } : { x: this.pvx, y: this.pvy };
+            const Tf = 0.55 + d / 700;
+            this.throwSpit(e.id, e.x + Math.cos(e.a) * 6, e.y + Math.sin(e.a) * 6, tg.x + tv.x * Tf * 0.6 + rand(-14, 14), tg.y + tv.y * Tf * 0.6 + rand(-14, 14));
+          }
+        }
+      }
       e.a = Phaser.Math.Angle.RotateTo(e.a, Math.atan2(dy, dx), 8 * dt);
       e.c.setPosition(e.x, e.y).setDepth(e.y);
       e.hitT -= dt;
@@ -1534,7 +1744,8 @@ class Game extends Phaser.Scene {
       for (const e of this.enemies) e.c.destroy();
       for (const it of this.items) { it.img.destroy(); it.sh.destroy(); }
       for (const n of this.nades) { n.img.destroy(); n.sh.destroy(); }
-      this.enemies = []; this.items = []; this.nades = []; this.spawnQ = [];
+      for (const q of this.spits) { q.img.destroy(); q.sh.destroy(); }
+      this.enemies = []; this.items = []; this.nades = []; this.spits = []; this.spawnQ = [];
       if (this.dead) this.revive();
       Object.assign(S, { hp: 100, armor: 0, medkits: 0, grenades: 1, wave: 0, kills: 0, score: 0, over: false });
       S.msg = t("joined"); S.msgT = 2.5;
@@ -1707,8 +1918,9 @@ class Game extends Phaser.Scene {
       case "hi": pendingHi = m; this.applyHi(m); if (m.name) S.myName = m.name; break;
       case "chat": this.addChat(String(m.who), String(m.text).slice(0, 120)); break;
       case "kill": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) this.kill(e, m.dir); break; }
-      case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm); sfx("hit", this.near(e.x, e.y)); } break; }
+      case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm, !!m.legs); sfx("hit", this.near(e.x, e.y)); } break; }
       case "boom": this.explode(m.x, m.y); break;
+      case "spit": { this.spawnSpit(m.x, m.y, m.z, m.vx, m.vy, m.vz, true); const e = this.enemies.find((q) => q.id === m.id); if (e?.hum) e.hum.recoil = 0.25; sfx("splat", this.near(m.x, m.y) * 0.8); break; }
       case "hurt": this.hurtPlayer(m.dmg, true); break;
       case "give":
         if (m.k === "grenade") { S.grenades++; sfx("pickup"); S.msg = t("got_nade"); }
@@ -1742,7 +1954,7 @@ class Game extends Phaser.Scene {
       const r2 = (v: number) => Math.round(v * 100) / 100;
       const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0, S.myName, S.weapon, Math.ceil(S.armor)]];
       for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0, mt.name, mt.w, Math.ceil(mt.armor)]);
-      const E = this.enemies.filter((e) => !e.dead).map((e) => [e.id, KIND_LIST.indexOf(e.kind), e.x | 0, e.y | 0, r2(e.a), r2(e.ph), e.hitT > 0 ? 1 : 0, e.hum ? (e.hum.armsOn[0] ? 1 : 0) | (e.hum.armsOn[1] ? 2 : 0) : 3]);
+      const E = this.enemies.filter((e) => !e.dead).map((e) => [e.id, KIND_LIST.indexOf(e.kind), e.x | 0, e.y | 0, r2(e.a), r2(e.ph), e.hitT > 0 ? 1 : 0, e.hum ? (e.hum.armsOn[0] ? 1 : 0) | (e.hum.armsOn[1] ? 2 : 0) | (e.hum.crawl ? 4 : 0) : 3]);
       const I = this.items.map((it) => [it.id, ITEM_KINDS.indexOf(it.kind), it.x | 0, it.y | 0]);
       const N = this.nades.map((n) => [n.x | 0, n.y | 0, n.z | 0, r2(n.spin), n.t < 0.7 && Math.sin(n.t * 40) > 0 ? 1 : 0]);
       send({ t: "snap", P, E, I, N, w: S.wave, k: S.kills, s: S.score, lt: Math.round(this.light.t * 1e4) / 1e4, o: S.over ? 1 : 0 });
@@ -1805,6 +2017,7 @@ class Game extends Phaser.Scene {
       e.tx = x; e.ty = y; e.a = a; e.ph = ph;
       if (hit) e.hitT = 0.07;
       if (e.hum) for (const side of [0, 1]) if (e.hum.armsOn[side] && !(arms & (1 << side))) e.hum.armsOn[side] = false;
+      if (e.hum && arms & 4 && !e.hum.crawl) e.hum.setCrawl();
     }
     for (const e of this.enemies) if (!e.dead && !here.has(e.id)) { e.dead = true; e.c.destroy(); }
     // предметы
@@ -1835,7 +2048,7 @@ class Game extends Phaser.Scene {
       if (Math.hypot(e.tx - fx, e.ty - fy) > 200) { e.x = e.tx; e.y = e.ty; }
       e.c.setPosition(e.x, e.y).setDepth(e.y);
       e.hitT -= dt;
-      if (e.hum) { e.hum.pose(e.a, e.a, e.ph, 1, false, Math.sin(e.ph * 0.5)); e.hum.flash(e.hitT > 0); }
+      if (e.hum) { e.hum.recoil = Math.max(0, e.hum.recoil - dt * 2.5); e.hum.pose(e.a, e.a, e.ph, 1, false, Math.sin(e.ph * 0.5)); e.hum.flash(e.hitT > 0); }
       else if (e.img) {
         e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
         e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(0xd8e0c8);
