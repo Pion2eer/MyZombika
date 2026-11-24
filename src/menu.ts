@@ -1,6 +1,7 @@
 // Главный экран: выбор режима, игра с другом, настройки, «как играть». Обычный HTML поверх игры
 // (за ним видно живой мир). Настройки хранятся в localStorage.
 import { LANGS, deviceLang, setLang, getLang, t, type Lang } from "./i18n";
+import { fetchTop, fmtTime, submitScore, localBest, type Result } from "./scores";
 
 export type Quality = "low" | "med" | "high";
 export type DayNight = "cycle" | "day" | "night";
@@ -27,10 +28,10 @@ try { Object.assign(settings, JSON.parse(localStorage.getItem(KEY) || "{}")); } 
 if (!(settings.lang in LANGS)) settings.lang = deviceLang();
 setLang(settings.lang);
 
-export interface MenuActions { waves(): void; host(): void; join(code: string): void; changed(): void }
+export interface MenuActions { waves(): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
 
 let root: HTMLDivElement | null = null;
-let page: "main" | "coop" | "settings" | "howto" = "main";
+let page: "main" | "coop" | "settings" | "howto" | "top" | "over" = "main";
 let acts: MenuActions | null = null;
 let joinCode = "";
 
@@ -66,6 +67,26 @@ const CSS = `
 .mz input[type=checkbox]{width:22px;height:22px;accent-color:#ffb060}
 .mz .join{display:flex;gap:8px;margin-bottom:10px}.mz .join input{flex:1}.mz .join .btn{width:auto;margin:0;text-align:center}
 .mz p{margin:0 0 10px;line-height:1.45;color:#ddd3bc}
+.mz.dead{background:radial-gradient(ellipse at center,rgba(60,6,4,.45) 0%,rgba(16,4,3,.9) 75%)}
+.mz .over{text-align:center}
+.mz .over .skull{width:64px;height:64px;margin:0 auto 4px;color:#e04a30;filter:drop-shadow(0 3px 8px rgba(0,0,0,.7))}
+.mz .over h1{color:#ff7a5a;text-shadow:0 3px 0 #3a0a06,0 6px 18px rgba(0,0,0,.8);font-size:clamp(34px,7vw,52px)}
+.mz .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0 10px}
+.mz .stat{background:rgba(28,24,18,.92);border:2px solid rgba(255,226,160,.25);border-radius:12px;padding:8px 4px}
+.mz .stat i{display:block;width:22px;height:22px;margin:0 auto 2px;color:#ffb060}.mz .stat i svg{width:100%;height:100%;display:block}
+.mz .stat b{display:block;font-size:24px;color:#ffe2a0;font-variant-numeric:tabular-nums}
+.mz .stat span{font-size:12px;color:#b8ae96}
+.mz .stat.hi{border-color:#ffb060;background:rgba(70,40,16,.92)}
+.mz .rec{margin:0 0 6px;color:#c8bfa8}.mz .rec.new{color:#c8f070;font-weight:800;font-size:18px}
+.mz .lb{min-height:22px;margin:0 0 12px;color:#ddd3bc}.mz .lb b{color:#ffe2a0}
+.mz .lbn{display:flex;gap:8px;margin:0 0 12px}.mz .lbn input{flex:1}.mz .lbn .btn{width:auto;margin:0}
+.mz table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.mz th{font-size:12px;font-weight:600;color:#b8ae96;text-align:right;padding:4px 6px}.mz th:nth-child(2),.mz td:nth-child(2){text-align:left}
+.mz td{padding:6px;text-align:right;border-top:1px solid rgba(255,255,255,.07)}
+.mz td:first-child{color:#b8ae96;width:2.5em}.mz td:nth-child(2){max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mz tr.me td{color:#ffe2a0;background:rgba(255,176,96,.12)}.mz tr.g1 td:first-child{color:#ffd24a;font-weight:800}
+.mz .tbl{max-height:min(52vh,420px);overflow:auto;margin:0 0 12px}
+@media (max-height:520px){.mz .over .skull{display:none}.mz .over h1{font-size:34px}.mz .stats{margin:8px 0 6px}.mz .stat b{font-size:20px}.mz .stat i{display:none}.mz .tbl{max-height:46vh}}
 .mz .ver{text-align:center;color:#7a705c;font-size:12px;margin-top:8px}
 @media (max-height:520px){.mz h1{font-size:38px}.mz .sub{margin-bottom:10px}.mz .btn{padding:9px 12px;font-size:16px;margin-bottom:8px}.mz .btn small{display:none}
  .mz .box.wide{width:min(720px,100%)}.mz .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}}
@@ -94,6 +115,18 @@ const ICON = {
   create: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>'),
   // вход в дверь: войти к другу
   join: svg('<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l4-4-4-4M14 12H4"/>'),
+  // кубок: топ игроков
+  top: svg('<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7M10 17h4v3h-4z"/>'),
+  // круговая стрелка: ещё раз
+  again: svg('<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4.5h-4.5"/>'),
+  // домик: главное меню
+  home: svg('<path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5M10 20v-5h4v5"/>'),
+  // часы
+  time: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  // мишень: убито
+  kills: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>'),
+  // звезда: очки
+  score: svg('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>'),
   // стрелка назад
   back: svg('<path d="M19 12H5M11 18l-6-6 6-6"/>'),
 };
@@ -105,7 +138,7 @@ function render() {
   const a = acts;
   root.dir = getLang() === "ar" ? "rtl" : "ltr";
   root.innerHTML = "";
-  const box = el("div", { class: "box" + (page === "main" ? " wide" : "") });
+  const box = el("div", { class: "box" + (page === "main" || page === "top" ? " wide" : "") });
   root.appendChild(box);
   const btn = (html: string, fn: () => void, cls = "", ic?: Icon) => {
     const b = el("button", { class: "btn " + cls + (ic ? " ico" : ""), type: "button" }, ic ? `<i class="ic">${ICON[ic]}</i><span class="tx">${html}</span>` : html);
@@ -121,6 +154,7 @@ function render() {
     st.setAttribute("disabled", "");
     g.appendChild(st);
     g.appendChild(btn(esc(t("m_coop")), () => { page = "coop"; render(); }, "", "coop"));
+    g.appendChild(btn(esc(t("m_top")), () => { back = "main"; page = "top"; render(); }, "", "top"));
     g.appendChild(btn(esc(t("m_settings")), () => { page = "settings"; render(); }, "", "settings"));
     g.appendChild(btn(esc(t("m_howto")), () => { page = "howto"; render(); }, "", "howto"));
   } else if (page === "coop") {
@@ -167,6 +201,46 @@ function render() {
     back.style.marginTop = "12px";
     c.appendChild(back);
     box.appendChild(c);
+  } else if (page === "top") {
+    const c = el("div", { class: "card" });
+    c.appendChild(el("h2", {}, esc(t("m_top"))));
+    const tb = el("div", { class: "tbl" }, `<p>${esc(t("lb_loading"))}</p>`);
+    c.appendChild(tb);
+    const me = (settings.name || "").toLowerCase();
+    fetchTop().then(({ top }) => {
+      if (!top.length) { tb.innerHTML = `<p>${esc(t("top_empty"))}</p>`; return; }
+      tb.innerHTML = `<table><tr><th>#</th><th>${esc(t("player"))}</th><th>${esc(t("score"))}</th><th>${esc(t("wave"))}</th><th>${esc(t("killed"))}</th><th>${esc(t("st_time"))}</th></tr>${top.map((r, i) =>
+        `<tr class="${r.name.toLowerCase() === me ? "me" : ""}${i < 3 ? " g1" : ""}"><td>${i + 1}</td><td>${esc(r.name)}${r.co > 1 ? " 👥" : ""}</td><td>${r.score}</td><td>${r.wave}</td><td>${r.kills}</td><td>${fmtTime(r.time)}</td></tr>`).join("")}</table>`;
+    }).catch(() => { tb.innerHTML = `<p>${esc(t("lb_off"))}</p>`; });
+    c.appendChild(btn(esc(t("m_back")), () => { page = back; render(); }, "", "back"));
+    box.appendChild(c);
+  } else if (page === "over" && over) {
+    const o = over, c = el("div", { class: "over" });
+    c.appendChild(el("div", { class: "skull" }, ICON.waves));
+    c.appendChild(el("h1", {}, esc(t("over_title"))));
+    const st = el("div", { class: "stats" });
+    const tile = (ic: keyof typeof ICON, v: string, l: string, hi = false) => st.appendChild(el("div", { class: "stat" + (hi ? " hi" : "") }, `<i>${ICON[ic]}</i><b>${esc(v)}</b><span>${esc(l)}</span>`));
+    tile("waves", String(o.r.wave), t("wave")); tile("kills", String(o.r.kills), t("killed")); tile("time", fmtTime(o.r.time), t("st_time")); tile("score", String(o.r.score), t("score"), true);
+    c.appendChild(st);
+    c.appendChild(el("p", { class: "rec" + (o.newBest ? " new" : "") }, esc(o.newBest ? t("new_best") : o.best > 0 ? t("st_best", { n: o.best }) : "")));
+    const lb = el("p", { class: "lb" }, esc(o.lb));
+    c.appendChild(lb);
+    if (o.ask) {
+      // имени ещё нет — спрашиваем, под каким именем записать в топ
+      const f = el("div", { class: "lbn" });
+      const inp = el("input", { type: "text", maxlength: "16", placeholder: t("lb_name") }) as HTMLInputElement;
+      const go = () => { const v = inp.value.replace(/[<>]/g, "").trim().slice(0, 16); if (!v) { inp.focus(); return; } settings.name = v; settings.save(); a.changed(); o.ask = false; sendScore(); };
+      inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") go(); };
+      f.append(inp, btn(esc(t("lb_send")), go, "", "top"));
+      c.appendChild(f);
+    }
+    const row = el("div", { class: "row2" });
+    const again = btn(esc(t("over_again")), () => a.again?.(), "main", "again");
+    if (o.client) { again.setAttribute("disabled", ""); again.querySelector(".tx")!.innerHTML += `<small>${esc(t("host_decides").replace(/[()]/g, "").trim())}</small>`; }
+    row.append(again, btn(esc(t("main_menu")), () => a.menu?.(), "", "home"));
+    c.appendChild(row);
+    c.appendChild(btn(esc(t("m_top")), () => { back = "over"; page = "top"; render(); }, "", "top"));
+    box.appendChild(c);
   } else {
     const c = el("div", { class: "card" });
     c.appendChild(el("h2", {}, esc(t("m_howto"))));
@@ -177,8 +251,7 @@ function render() {
   box.appendChild(el("div", { class: "ver" }, `v${__VERSION__} · ${__BUILT__} · myzombika.pion.ltd`));
 }
 
-export function openMenu(actions: MenuActions, code = "") {
-  acts = actions; joinCode = code; page = "main";
+function ensureRoot() {
   if (!root) {
     document.head.appendChild(el("style", {}, CSS));
     root = el("div", { class: "mz" }) as HTMLDivElement;
@@ -187,6 +260,32 @@ export function openMenu(actions: MenuActions, code = "") {
     document.body.appendChild(root);
   }
   root.style.display = "flex";
+}
+export function openMenu(actions: MenuActions, code = "") {
+  acts = actions; joinCode = code; page = "main";
+  ensureRoot(); root!.classList.remove("dead");
+  render();
+}
+
+// ───────── экран смерти ─────────
+let back: "main" | "over" = "main";
+let over: { r: Result; best: number; newBest: boolean; lb: string; ask: boolean; client: boolean; sent: boolean } | null = null;
+function sendScore() {
+  const o = over;
+  if (!o || o.sent || o.ask) return;
+  if (o.r.score <= 0) { o.lb = ""; return; }
+  o.sent = true; o.lb = t("lb_sending"); if (page === "over") render();
+  submitScore(settings.name, o.r).then(
+    (res) => { if (over === o) { o.lb = t("lb_place", { p: res.place, n: res.total }); if (page === "over") render(); } },
+    () => { if (over === o) { o.lb = t("lb_off"); if (page === "over") render(); } });
+}
+/** показать экран смерти; again — начать заново (у гостя кнопка неактивна), menu — в главное меню */
+export function openOver(actions: MenuActions, r: Result, client: boolean) {
+  acts = actions; page = "over"; back = "main";
+  const old = localBest(r.score);
+  over = { r, best: Math.max(old, r.score), newBest: r.score > old && old > 0, lb: "", ask: !settings.name && r.score > 0, client, sent: false };
+  sendScore();
+  ensureRoot(); root!.classList.add("dead");
   render();
 }
 export function closeMenu() { if (root) root.style.display = "none"; }

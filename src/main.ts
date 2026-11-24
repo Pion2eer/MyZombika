@@ -7,7 +7,9 @@ import { sfx, setSound, toggleMute, unlockAudio } from "./sfx";
 import { t, type Key } from "./i18n";
 // на телефоне подсказки без названий клавиш: «Позвать друга (H)» → «Позвать друга»
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
-import { settings, openMenu, closeMenu } from "./menu";
+import { settings, openMenu, closeMenu, openOver } from "./menu";
+import { startRun } from "./scores";
+import { HUD_ART, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
@@ -54,7 +56,7 @@ interface Hit { x: number; y: number; w: number; h: number; fn: () => void }
 // ───────── общее состояние для HUD ─────────
 interface Stick { id: number; ox: number; oy: number; x: number; y: number }
 export const S = (window as any).S = {
-  hp: 100, maxHp: 100, grenades: 1, reload: 0, wave: 0, kills: 0, score: 0, over: false,
+  hp: 100, maxHp: 100, grenades: 1, reload: 0, wave: 0, kills: 0, score: 0, over: false, time: 0,
   /** оружие: выбранная ячейка (0..3), патроны в магазинах, какое оружие есть (в «волнах» — всё) */
   weapon: 0, clip: fullClips(), owned: [true, true, true, true],
   armor: 0, medkits: 0, inv: false, hits: [] as Hit[],
@@ -423,7 +425,7 @@ class Game extends Phaser.Scene {
   }
 
   create() {
-    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
+    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
     this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
@@ -554,7 +556,8 @@ class Game extends Phaser.Scene {
     cam.shake = ((d?: number, i?: number) => (settings.shake ? shake(d, i) : cam)) as typeof cam.shake;
     this.applySettings();
     S.menu = false;
-    if (menuOnStart) { menuOnStart = false; this.showMenu(); }
+    this.overShown = false;
+    if (menuOnStart) { menuOnStart = false; this.showMenu(); } else { closeMenu(); startRun(); }
     this.setupNet();
     if (!this.scene.isActive("ui")) this.scene.launch("ui");
   }
@@ -630,6 +633,18 @@ class Game extends Phaser.Scene {
       else if (e.img) e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
     }
   }
+  overShown = false;
+  /** экран смерти (DOM поверх игры): итоги, рекорд, место в топе */
+  showOver() {
+    const kb = this.input.keyboard!;
+    kb.resetKeys();
+    openOver({
+      waves: () => {}, host: () => {}, join: () => {},
+      changed: () => this.applySettings(),
+      again: () => this.restartGame(),
+      menu: () => this.toMenu(),
+    }, { score: S.score, wave: S.wave, kills: S.kills, time: Math.round(S.time), co: NET.role === "solo" ? 1 : NET.role === "host" ? NET.conns.size + 1 : 2 }, NET.role === "client");
+  }
   startPlay() {
     // зомби главного экрана уходят, игра начинается с героя в центре
     for (const e of this.enemies) e.c.destroy();
@@ -640,6 +655,7 @@ class Game extends Phaser.Scene {
     this.cameras.main.centerOn(this.px, this.py);
     closeMenu();
     S.menu = false;
+    startRun();
     unlockAudio();
     const kb = this.input.keyboard!;
     kb.enabled = true; kb.enableGlobalCapture(); kb.resetKeys();
@@ -1460,7 +1476,11 @@ class Game extends Phaser.Scene {
     this.drawFx(dt);
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
     if (!document.hidden) { this.light.adapt(dtMs, settings.quality === "high" ? 2 : 1); this.updateLight(dt); }
-    if (S.over) { this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return; }
+    if (S.over) {
+      if (!this.overShown) { this.overShown = true; this.showOver(); }
+      this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return;
+    }
+    S.time += dt;
 
     // ── ходьба ──
     let mx = 0, my = 0;
@@ -1814,7 +1834,7 @@ class Game extends Phaser.Scene {
       for (const q of this.spits) { q.img.destroy(); q.sh.destroy(); }
       this.enemies = []; this.items = []; this.nades = []; this.spits = []; this.spawnQ = [];
       if (this.dead) this.revive();
-      Object.assign(S, { hp: 100, armor: 0, medkits: 0, grenades: 1, wave: 0, kills: 0, score: 0, over: false });
+      Object.assign(S, { hp: 100, armor: 0, medkits: 0, grenades: 1, wave: 0, kills: 0, score: 0, time: 0, over: false });
       S.msg = t("joined"); S.msgT = 2.5;
       if (settings.name) send({ t: "name", name: settings.name });
       if (S.paused) this.togglePause();
@@ -2161,11 +2181,91 @@ class UI extends Phaser.Scene {
   doll!: Humanoid;
   invT: Phaser.GameObjects.Text[] = [];
   bagT!: Phaser.GameObjects.Text;
+  /** верхняя панель: картинки и надписи из пула (каждый кадр раздаются заново) */
+  g2!: Phaser.GameObjects.Graphics;
+  pool: Phaser.GameObjects.Image[] = []; pi = 0;
+  tpool: Phaser.GameObjects.Text[] = []; tpi = 0;
   constructor() { super("ui"); }
   get gm() { return this.scene.get("game") as Game; }
+  preload() { loadHudFiles(this); }
+  img(n: HudArt, x: number, y: number, sc = 1, alpha = 1) {
+    let im = this.pool[this.pi++];
+    if (!im) { im = this.add.image(0, 0, "hud_" + n).setDepth(0.5); this.pool.push(im); }
+    const [iw, ih] = HUD_ART[n];
+    return im.setTexture("hud_" + n).setDisplaySize(iw * sc, ih * sc).setOrigin(0, 0.5).setPosition(x, y).setAlpha(alpha).setVisible(true);
+  }
+  txt(s: string, x: number, y: number, size: number, color = "#f2ead8", ox = 0) {
+    let tt = this.tpool[this.tpi++];
+    if (!tt) { tt = this.add.text(0, 0, "", { fontFamily: "system-ui, Segoe UI, Roboto, sans-serif", fontStyle: "800", stroke: "#14110d", strokeThickness: 4 }).setDepth(1); this.tpool.push(tt); }
+    return tt.setText(s).setFontSize(size).setColor(color).setOrigin(ox, 0.5).setPosition(x, y).setVisible(true);
+  }
+  /** верх экрана: жизнь, броня, волна/убито/очки/время суток, патроны пульками, гранаты и аптечки */
+  drawTop(g: Phaser.GameObjects.Graphics, w: number, h: number) {
+    const g2 = this.g2, sc = w < 700 || h < 450 ? 0.82 : 1, x = 12;
+    let y = 12 + 15 * sc;
+    // жизнь: сердце (бьётся, когда мало) и полоска в рамке
+    const f = Phaser.Math.Clamp(S.hp / S.maxHp, 0, 1), low = f < 0.3;
+    const beat = low ? 1 + Math.max(0, Math.sin(performance.now() / 110)) * 0.12 : 1;
+    this.img("heart", x - (beat - 1) * 15 * sc, y, sc * beat);
+    const bx = x + 36 * sc, bw = HUD_ART.bar[0] * sc, bh = HUD_ART.bar[1] * sc;
+    this.img("bar", bx, y, sc).setDepth(0.4);
+    const ix = bx + 4 * sc, iy = y - bh / 2 + 4 * sc, iw = bw - 8 * sc, ih = bh - 8 * sc;
+    const [c1, c2] = f > 0.5 ? [0x8ae05a, 0x3a8a22] : f > 0.25 ? [0xffd050, 0xb07a10] : [0xff6a50, 0xa01810];
+    if (f > 0) {
+      g2.fillGradientStyle(c1, c1, c2, c2, 1).fillRect(ix, iy, iw * f, ih);
+      g2.fillStyle(0xffffff, 0.28).fillRect(ix, iy + 1, iw * f, ih * 0.3);
+    }
+    g2.fillStyle(0x000000, 0.28);
+    for (let i = 1; i < 10; i++) g2.fillRect(ix + (iw * i) / 10 - 0.5, iy, 1, ih);
+    this.txt(`${Math.ceil(S.hp)}`, bx + bw / 2, y + 0.5, 14 * sc, "#ffffff", 0.5).setStroke("#14110d", 3);
+    // броня — щит и тонкая синяя полоска
+    if (S.armor > 0) {
+      y += 24 * sc;
+      this.img("shield", x + 1 * sc, y, sc * 0.8);
+      const ah = 10 * sc, aw = bw * 0.8;
+      g2.fillStyle(0x14110d, 0.82).fillRoundedRect(bx, y - ah / 2, aw, ah, 4).lineStyle(1.5, 0x8ab0e8, 0.9).strokeRoundedRect(bx, y - ah / 2, aw, ah, 4);
+      g2.fillGradientStyle(0xb0d0ff, 0xb0d0ff, 0x4a6ab8, 0x4a6ab8, 1).fillRect(bx + 2, y - ah / 2 + 2, (aw - 4) * Math.min(1, S.armor / 100), ah - 4);
+    }
+    // плашки: значок + число
+    const pill = (cx: number, cy: number, icon: HudArt | null, s: string, color = "#f2ead8", isc = 0.85) => {
+      const ic = icon ? this.img(icon, cx + 6 * sc, cy, sc * isc) : null;
+      const tx = this.txt(s, cx + (ic ? ic.displayWidth + 11 * sc : 10 * sc), cy + 0.5, 15 * sc, color);
+      const pw = (ic ? ic.displayWidth + 11 * sc : 10 * sc) + tx.width + 9 * sc;
+      g.fillStyle(0x14110d, 0.6).fillRoundedRect(cx, cy - 14 * sc, pw, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(cx, cy - 14 * sc, pw, 28 * sc, 14 * sc);
+      return cx + pw + 6 * sc;
+    };
+    y += 32 * sc;
+    let cx = x;
+    cx = pill(cx, y, "wave", `${S.wave}`, "#d8f0a0");
+    cx = pill(cx, y, "kills", `${S.kills}`);
+    cx = pill(cx, y, "score", `${S.score}`, "#ffe2a0");
+    pill(cx, y, this.gm.light?.night > 0.5 ? "moon" : "sun", S.daytime, "#e8e0cc");
+    // патроны: пульки текущего оружия, истраченные — тусклые; при перезарядке наполняются
+    y += 32 * sc;
+    const W_ = WEAPONS[SLOTS[S.weapon]];
+    cx = x;
+    const name = this.txt(wname(W_.id), x + 10 * sc, y + 0.5, 13 * sc, "#ffe2a0");
+    let ex = x + 10 * sc + name.width + 8 * sc;
+    if (W_.id === "grenade") {
+      const n = Math.min(S.grenades, 12);
+      for (let i = 0; i < Math.max(1, n); i++) this.img("grenade", ex + i * 17 * sc, y, sc * 0.72, n ? 1 : 0.2);
+      ex += Math.max(1, n) * 17 * sc + 4 * sc;
+    } else {
+      const [art, step] = W_.id === "rifle" ? ["bullet_rifle", 6.6] as const : W_.id === "shotgun" ? ["shell", 12] as const : ["bullet_pistol", 9] as const;
+      const full = S.reload > 0 ? Math.floor(W_.mag * (1 - S.reload / W_.reload)) : S.clip[W_.id];
+      for (let i = 0; i < W_.mag; i++) this.img(art, ex + i * step * sc, y, sc, i < full ? (S.reload > 0 ? 0.6 : 1) : 0.16);
+      ex += W_.mag * step * sc + 4 * sc;
+    }
+    g.fillStyle(0x14110d, 0.6).fillRoundedRect(x, y - 14 * sc, ex - x + 4 * sc, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(x, y - 14 * sc, ex - x + 4 * sc, 28 * sc, 14 * sc);
+    cx = ex + 10 * sc;
+    if (W_.id !== "grenade") cx = pill(cx, y, "grenade", `×${S.grenades}`, S.grenades ? "#f2ead8" : "#8a8270", 0.8);
+    pill(cx, y, "medkit", `×${S.medkits}`, S.medkits ? "#f2ead8" : "#8a8270", 0.8);
+  }
   create() {
     const font = "system-ui, Segoe UI, Roboto, sans-serif";
+    makeHudArt(this);
     this.g = this.add.graphics();
+    this.g2 = this.add.graphics().setDepth(0.45);
     this.info = this.add.text(16, 40, "", { fontFamily: font, fontSize: "16px", fontStyle: "700", color: "#f2ead8", stroke: "#14110d", strokeThickness: 4 });
     this.big = this.add.text(0, 0, "", { fontFamily: font, fontSize: "40px", fontStyle: "800", color: "#ffe2a0", stroke: "#14110d", strokeThickness: 6, align: "center" }).setOrigin(0.5);
     this.chatT = this.add.text(16, 0, "", { fontFamily: font, fontSize: "15px", color: "#f2ead8", stroke: "#14110d", strokeThickness: 4, lineSpacing: 2 }).setOrigin(0, 1);
@@ -2244,6 +2344,10 @@ class UI extends Phaser.Scene {
   }
   update() {
     const w = this.scale.width, h = this.scale.height, g = this.g.clear();
+    this.g2.clear();
+    for (const o of this.pool) o.setVisible(false);
+    for (const o of this.tpool) o.setVisible(false);
+    this.pi = 0; this.tpi = 0;
     if (S.menu) {
       for (const o of [this.info, this.big, this.help, this.net, this.chatT, this.bagT, ...this.btn, ...this.slotT, ...this.invT]) o.setVisible(false);
       this.doll.c.setVisible(false);
@@ -2262,15 +2366,8 @@ class UI extends Phaser.Scene {
     const want = S.paused || S.over || S.inv ? "default" : "none";
     const el = document.getElementById("game");
     if (el && el.style.cursor !== want) { el.style.cursor = want; this.game.canvas.style.cursor = want; }
-    // полоска здоровья
-    g.fillStyle(0x14110d, 0.8).fillRoundedRect(14, 14, 204, 18, 5);
-    const f = S.hp / S.maxHp;
-    g.fillStyle(f > 0.5 ? 0x6cc04a : f > 0.25 ? 0xe0b030 : 0xd83a2a).fillRoundedRect(16, 16, 200 * f, 14, 4);
-    // броня — синяя полоска под здоровьем
-    if (S.armor > 0) g.fillStyle(0x14110d, 0.8).fillRoundedRect(14, 33, 204, 9, 4).fillStyle(0x6a8ac8).fillRoundedRect(16, 35, 200 * Math.min(1, S.armor / 100), 5, 2);
-    const cw = WEAPONS[SLOTS[S.weapon]];
-    const ammo = cw.id === "grenade" ? `${S.grenades}` : S.reload > 0 ? t("reloading") : `${S.clip[cw.id]}/${cw.mag}`;
-    this.info.setPosition(16, 46).setText(`${wname(cw.id)}: ${ammo}   ${t("grenades")}: ${S.grenades}   ${t("meds")}: ${S.medkits}${S.armor > 0 ? `   ${t("armor")}: ${Math.ceil(S.armor)}` : ""}\n${t("wave")}: ${S.wave}   ${t("killed")}: ${S.kills}   ${t("score")}: ${S.score}\n${S.daytime}`);
+    this.info.setText("");
+    if (!S.over && !S.inv) this.drawTop(g, w, h);
     this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : t("help"));
     // ячейки оружия и рюкзак: внизу по центру (на тачскрине — между стиками, а если тесно — над кнопками справа)
     if (!S.over && !S.inv) {
@@ -2291,8 +2388,7 @@ class UI extends Phaser.Scene {
       // кнопка «снаряжение» (рюкзак): на компьютере — слева от паузы/чата, на тачскрине — в конце ряда ячеек
       const kx = S.touch ? bx + SLOTS.length * (sw + gap) : w - 104, ky = S.touch ? by + 1 : 12;
       g.fillStyle(0x14110d, 0.55).fillRoundedRect(kx, ky, 42, 42, 8);
-      g.fillStyle(0x8a6a3a, 0.95).fillRoundedRect(kx + 10, ky + 12, 22, 22, 5).lineStyle(2.5, 0x8a6a3a, 0.95).strokeRoundedRect(kx + 15, ky + 6, 12, 10, 4);
-      g.fillStyle(0x5a4426, 1).fillRoundedRect(kx + 14, ky + 21, 14, 8, 2);
+      this.img("bag", kx + 7, ky + 21);
       if (!S.touch) this.bagT.setPosition(kx + 21, ky + 50).setText("I").setVisible(true);
       hits.push({ x: kx, y: ky, w: 42, h: 42, fn: () => gm.toggleInv() });
       S.lift = lift;
@@ -2320,22 +2416,19 @@ class UI extends Phaser.Scene {
       this.big.setAlpha(0);
       this.drawInv(g, w, h, hits);
     } else if (S.over) {
-      g.fillStyle(0x000000, 0.55).fillRect(0, 0, w, h);
-      this.big.setPosition(w / 2, h / 2).setText(`${t("over_title")}\n${t("over_stats", { w: S.wave, k: S.kills, s: S.score })}\n\n${S.touch ? t("over_touch") : t("over_key")}${NET.role === "client" ? t("host_decides") : ""}`).setFontSize(Math.min(34, w / 22)).setAlpha(1);
+      this.big.setAlpha(0); // итоги — на экране смерти (menu.ts)
     } else {
       this.big.setPosition(w / 2, h * 0.28).setText(S.msg).setFontSize(42).setAlpha(Phaser.Math.Clamp(S.msgT, 0, 1));
     }
     // кнопка паузы (в кооперативе мир не останавливается — кнопки нет)
     if (!S.over && NET.role === "solo") {
       g.fillStyle(0x14110d, 0.55).fillRoundedRect(w - 54, 12, 42, 42, 8);
-      g.fillStyle(0xf2ead8, 0.9);
-      if (S.paused) g.fillTriangle(w - 41, 22, w - 41, 44, w - 22, 33);
-      else g.fillRect(w - 42, 22, 6, 22).fillRect(w - 30, 22, 6, 22);
+      this.img(S.paused ? "play" : "pause", w - 45, 33);
     }
     // кнопка чата (в кооперативе — на месте паузы)
     if (NET.role !== "solo") {
-      g.fillStyle(0x14110d, 0.55).fillRoundedRect(w - 54, 12, 42, 42, 8).fillStyle(0xf2ead8, 0.9);
-      g.fillRoundedRect(w - 45, 21, 24, 16, 4).fillTriangle(w - 41, 36, w - 35, 36, w - 42, 43);
+      g.fillStyle(0x14110d, 0.55).fillRoundedRect(w - 54, 12, 42, 42, 8);
+      this.img("chat", w - 47, 33);
     }
     // чат: последние сообщения слева внизу, гаснут через 12 с (пока пишешь — видны все)
     const now = performance.now();
@@ -2357,12 +2450,12 @@ class UI extends Phaser.Scene {
       // кнопка гранаты
       const bx = w - 110, by = h - 235 - S.lift;
       g.fillStyle(0x14110d, 0.45).fillCircle(bx, by, 30).lineStyle(3, 0xffffff, S.grenades ? 0.5 : 0.2).strokeCircle(bx, by, 30);
-      g.fillStyle(0x5e6e2c, S.grenades ? 0.95 : 0.35).fillEllipse(bx, by + 3, 18, 22).fillStyle(0x9a9a92, S.grenades ? 0.95 : 0.35).fillRect(bx - 3, by - 13, 6, 6);
+      this.img("grenade", bx - 12, by, 1.1, S.grenades ? 1 : 0.35);
       // кнопка аптечки — левее гранаты
       if (!S.inv) {
         const hx = w - 190, hy = h - 215 - S.lift, on = S.medkits > 0;
         g.fillStyle(0x14110d, 0.45).fillCircle(hx, hy, 26).lineStyle(3, 0xffffff, on ? 0.5 : 0.2).strokeCircle(hx, hy, 26);
-        g.fillStyle(0xeeeeee, on ? 0.95 : 0.3).fillRoundedRect(hx - 11, hy - 9, 22, 18, 3).fillStyle(0xd83a2a, on ? 1 : 0.35).fillRect(hx - 2.5, hy - 7, 5, 14).fillRect(hx - 7, hy - 2.5, 14, 5);
+        this.img("medkit", hx - 13, hy, 1, on ? 1 : 0.35);
         hits.push({ x: hx - 28, y: hy - 28, w: 56, h: 56, fn: () => gm.useMedkit() });
       }
     }

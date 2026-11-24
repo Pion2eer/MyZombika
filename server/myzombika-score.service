@@ -1,0 +1,20 @@
+[Unit]
+Description=MyZombika leaderboard
+After=network.target
+
+[Service]
+User=myzombika
+WorkingDirectory=/opt/myzombika-score
+Environment=PORT=8787
+Environment=DATA_DIR=/opt/myzombika-score/data
+ExecStart=/usr/bin/node /opt/myzombika-score/score.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/myzombika-score/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
