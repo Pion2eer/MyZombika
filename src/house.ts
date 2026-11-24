@@ -3,15 +3,31 @@
 // перед дальней стеной и за ближней. Крыша — отдельная картинка поверх всего, прозрачнеет, когда ты внутри.
 import Phaser from "phaser";
 
-/** стена: прямоугольник в мировых px (от левого верхнего угла дома) и высота, px */
-export interface WallBox { x0: number; y0: number; x1: number; y1: number; h: number }
+/** стена в координатах дома: прямоугольник (px от левого верхнего угла) и высота, px */
+interface LocalBox { x0: number; y0: number; x1: number; y1: number; h: number }
+/** стена в мире: повёрнутый прямоугольник — центр, полуразмеры вдоль своих осей, поворот (cos, sin), высота, углы */
+export interface WallBox { cx: number; cy: number; ex: number; ey: number; c: number; s: number; h: number; pts: { x: number; y: number }[] }
 export interface House {
-  x: number; y: number; w: number; h: number;
-  /** стены в мировых координатах (для столкновений, пуль, пути и теней) */
+  /** центр и поворот дома */
+  cx: number; cy: number; c: number; s: number; w: number; h: number;
+  /** рамка дома в мире (для расстановки деревьев и появления монстров) */
+  bx0: number; by0: number; bx1: number; by1: number;
   walls: WallBox[];
   roof: Phaser.GameObjects.Image;
   parts: Phaser.GameObjects.Image[];
 }
+/** точка мира → координаты стены (от её центра, вдоль её осей) */
+export function wLocal(w: WallBox, x: number, y: number) { const dx = x - w.cx, dy = y - w.cy; return { x: dx * w.c + dy * w.s, y: -dx * w.s + dy * w.c }; }
+export function wWorld(w: WallBox, lx: number, ly: number) { return { x: w.cx + lx * w.c - ly * w.s, y: w.cy + lx * w.s + ly * w.c }; }
+/** расстояние от точки до стены (0 — внутри) */
+export function wDist(w: WallBox, x: number, y: number) { const l = wLocal(w, x, y); return Math.hypot(Math.max(0, Math.abs(l.x) - w.ex), Math.max(0, Math.abs(l.y) - w.ey)); }
+/** точка внутри дома (в его координатах, с запасом m) */
+export function inHouse(hs: House, x: number, y: number, m = 0) {
+  const dx = x - hs.cx, dy = y - hs.cy, lx = dx * hs.c + dy * hs.s, ly = -dx * hs.s + dy * hs.c;
+  return Math.abs(lx) < hs.w / 2 + m && Math.abs(ly) < hs.h / 2 + m;
+}
+/** поворот дома, рад (по часовой: видна ещё и восточная стена) */
+const ROT = (25 * Math.PI) / 180;
 
 const V = 2; // px на воксель
 const LZ = 2; // высота слоя, px
@@ -33,7 +49,7 @@ function shade(c: number, k: number) {
 const hex = (c: number) => "#" + c.toString(16).padStart(6, "0");
 
 /** стены дома (относительно его угла): целые, разрушенные, с дверным проёмом */
-const WALLS: WallBox[] = [
+const WALLS: LocalBox[] = [
   { x0: 0, y0: 0, x1: HW, y1: 6, h: WALL_H }, // север
   { x0: 0, y0: 0, x1: 6, y1: 66, h: WALL_H }, // запад (нижняя часть обвалилась)
   { x0: HW - 6, y0: 0, x1: HW, y1: HH, h: WALL_H }, // восток
@@ -124,74 +140,94 @@ function roofAt(i: number, j: number): { z: number; col: number } | null {
   return { z, col: shade(c, y > mid ? 1.05 : 0.85) };
 }
 
-/** нарисовать набор клеток стопкой срезов; rows — какие ряды j; маска возвращает цвет по (i, j, z) или -1 */
-function draw(ctx: CanvasRenderingContext2D, oy: number, j0: number, j1: number, f: (i: number, j: number) => Cell | null, zMax: number) {
-  for (let z = 0; z < zMax; z++)
-    for (let j = j0; j < j1; j++)
-      for (let i = 0; i < NX; i++) {
-        const c = f(i, j);
-        if (!c || z >= c.h) continue;
-        const col = c.col(z);
-        if (col < 0) continue;
-        // верхний срез стены светлее — видно, что это верх, а не бок
-        const k = (0.78 + 0.22 * (z / zMax)) * (z === c.h - 1 ? 1.22 : 1);
-        const px = i * V * K, py = (j * V - z * LZ * DZ) * K + oy;
-        ctx.fillStyle = hex(shade(col, k * 0.72)); // боковая грань
-        ctx.fillRect(px, py + V * K, V * K, LZ * DZ * K + 0.5);
-        ctx.fillStyle = hex(shade(col, k));
-        ctx.fillRect(px, py, V * K, V * K + 0.5);
-      }
+/**
+ * Нарисовать клетки стопкой срезов в повёрнутом виде: каждый слой — повёрнутые квадраты, сдвинутые вверх по экрану.
+ * pick(i, j) — брать ли клетку в эту картинку (полосы по глубине). ox, oy — где в мире левый верх картинки.
+ */
+function draw(ctx: CanvasRenderingContext2D, ox: number, oy: number, hx: number, hy: number, f: (i: number, j: number) => Cell | null, zMax: number, pick: (i: number, j: number) => boolean) {
+  const c = Math.cos(ROT), s = Math.sin(ROT), cx = hx + HW / 2, cy = hy + HH / 2;
+  const cells: { i: number; j: number; c: Cell }[] = [];
+  for (let j = -3; j < NY + 3; j++) for (let i = -3; i < NX + 3; i++) {
+    const cl = f(i, j);
+    if (cl && pick(i, j)) cells.push({ i, j, c: cl });
+  }
+  for (let z = 0; z < zMax; z++) {
+    // локальные px дома → px картинки: поворот вокруг центра дома, сдвиг слоя вверх по экрану
+    const tx = (cx - ox) * K, ty = (cy - oy - z * LZ * DZ) * K;
+    ctx.setTransform(c * K, s * K, -s * K, c * K, tx - (c * HW / 2 - s * HH / 2) * K, ty - (s * HW / 2 + c * HH / 2) * K);
+    for (const { i, j, c: cl } of cells) {
+      if (z >= cl.h) continue;
+      const col = cl.col(z);
+      if (col < 0) continue;
+      // нижние слои темнее (бок стены), верхний срез светлее — видно, где верх
+      const k = (0.72 + 0.28 * (z / zMax)) * (z === cl.h - 1 ? 1.22 : 1);
+      ctx.fillStyle = hex(shade(col, k));
+      ctx.fillRect(i * V - 0.15, j * V - 0.15, V + 0.3, V + 0.3);
+    }
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 export function buildHouse(scene: Phaser.Scene, hx: number, hy: number): House {
   const tex = scene.textures, parts: Phaser.GameObjects.Image[] = [];
+  const c = Math.cos(ROT), s = Math.sin(ROT), cx = hx + HW / 2, cy = hy + HH / 2;
+  const toW = (lx: number, ly: number) => ({ x: cx + (lx - HW / 2) * c - (ly - HH / 2) * s, y: cy + (lx - HW / 2) * s + (ly - HH / 2) * c });
+  // рамка дома в мире (с крышей)
+  const corners = [toW(-6, -6), toW(HW + 6, -6), toW(HW + 6, HH + 6), toW(-6, HH + 6)];
+  const bx0 = Math.min(...corners.map((q) => q.x)), bx1 = Math.max(...corners.map((q) => q.x));
+  const by0 = Math.min(...corners.map((q) => q.y)), by1 = Math.max(...corners.map((q) => q.y));
+  const bw = Math.ceil(bx1 - bx0), bh = Math.ceil(by1 - by0);
   const margin = (WALL_H + 2) * DZ; // насколько стены поднимаются над основанием, px
+  // мировой Y центра клетки — по нему клетка попадает в полосу глубины
+  const wy = (i: number, j: number) => toW(i * V + 1, j * V + 1).y;
   // пол
   if (!tex.exists("house_floor")) {
-    const c = document.createElement("canvas");
-    c.width = HW * K; c.height = HH * K;
-    const x = c.getContext("2d")!;
-    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
-      const col = floorAt(i, j);
-      if (col < 0) continue;
-      x.fillStyle = hex(col); x.fillRect(i * V * K, j * V * K, V * K, V * K);
-    }
-    tex.addCanvas("house_floor", c);
+    const cv = document.createElement("canvas");
+    cv.width = bw * K; cv.height = bh * K;
+    draw(cv.getContext("2d")!, bx0, by0, hx, hy, (i, j) => { const col = floorAt(i, j); return col < 0 ? null : { h: 1, col: () => col }; }, 1, () => true);
+    tex.addCanvas("house_floor", cv);
   }
-  parts.push(scene.add.image(hx, hy, "house_floor").setOrigin(0).setScale(1 / K).setDepth(-4.6));
-  // стены полосами по 6 px (3 ряда клеток); обломки — вместе со стенами
-  const STRIP = 3;
-  for (let s = 0; s * STRIP < NY; s++) {
-    const key = `house_wall_${s}`, j0 = s * STRIP, j1 = Math.min(NY, j0 + STRIP);
+  parts.push(scene.add.image(bx0, by0, "house_floor").setOrigin(0).setScale(1 / K).setDepth(-4.6));
+  // стены полосами по 6 px мира по глубине; обломки — вместе со стенами
+  const STRIP = 6;
+  const wallCell = (i: number, j: number) => cellAt(i, j) ?? rubbleAt(i, j);
+  for (let s0 = Math.floor(by0 / STRIP) * STRIP, n = 0; s0 < by1; s0 += STRIP, n++) {
+    const key = `house_wall_${n}`, s1 = s0 + STRIP;
     if (!tex.exists(key)) {
-      const c = document.createElement("canvas");
-      c.width = HW * K; c.height = Math.ceil((STRIP * V + margin + 2) * K);
-      const x = c.getContext("2d")!;
-      const oy = margin * K - j0 * V * K;
-      draw(x, oy, j0, j1, (i, j) => cellAt(i, j) ?? rubbleAt(i, j), Math.ceil(WALL_H / LZ));
-      tex.addCanvas(key, c);
+      const cv = document.createElement("canvas");
+      cv.width = bw * K; cv.height = Math.ceil((STRIP + margin + 3) * K);
+      draw(cv.getContext("2d")!, bx0, s0 - margin, hx, hy, wallCell, Math.ceil(WALL_H / LZ), (i, j) => { const y = wy(i, j); return y >= s0 && y < s1; });
+      tex.addCanvas(key, cv);
     }
-    parts.push(scene.add.image(hx, hy + j0 * V - margin, key).setOrigin(0).setScale(1 / K).setDepth(hy + j1 * V));
+    parts.push(scene.add.image(bx0, s0 - margin, key).setOrigin(0).setScale(1 / K).setDepth(s1));
   }
   // крыша
   const rz = Math.ceil(WALL_H / LZ) + 10, rMargin = rz * LZ * DZ + 4;
   if (!tex.exists("house_roof")) {
-    const c = document.createElement("canvas");
-    c.width = (HW + 12) * K; c.height = Math.ceil((HH + 12 + rMargin) * K);
-    const x = c.getContext("2d")!;
-    // только верхняя поверхность ската: по слою на клетку + торцы
-    for (let j = -3; j < NY + 3; j++) for (let i = -3; i < NX + 3; i++) {
-      const r = roofAt(i, j);
-      if (!r) continue;
-      const px = (i * V + 6) * K, py = (j * V + 6 - r.z * LZ * DZ) * K + rMargin * K;
-      x.fillStyle = hex(shade(r.col, 0.6)); x.fillRect(px, py + V * K, V * K, LZ * DZ * K * 2);
-      x.fillStyle = hex(r.col); x.fillRect(px, py, V * K, V * K + 0.5);
+    const cv = document.createElement("canvas");
+    cv.width = bw * K; cv.height = Math.ceil((bh + rMargin) * K);
+    // только верхняя поверхность ската: каждая клетка на своей высоте
+    const cells: { i: number; j: number; z: number; col: number }[] = [];
+    for (let j = -3; j < NY + 3; j++) for (let i = -3; i < NX + 3; i++) { const r = roofAt(i, j); if (r) cells.push({ i, j, ...r }); }
+    cells.sort((a, b) => a.z - b.z);
+    const x = cv.getContext("2d")!;
+    for (const q of cells) for (const [dz, k] of [[-1, 0.6], [0, 1]] as const) {
+      const tx = (cx - bx0) * K, ty = (cy - by0 + rMargin - (q.z + dz) * LZ * DZ) * K;
+      x.setTransform(c * K, s * K, -s * K, c * K, tx - (c * HW / 2 - s * HH / 2) * K, ty - (s * HW / 2 + c * HH / 2) * K);
+      x.fillStyle = hex(shade(q.col, k));
+      x.fillRect(q.i * V - 0.15, q.j * V - 0.15, V + 0.3, V + 0.3);
     }
-    tex.addCanvas("house_roof", c);
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    tex.addCanvas("house_roof", cv);
   }
-  const roof = scene.add.image(hx - 6, hy - 6 - rMargin, "house_roof").setOrigin(0).setScale(1 / K).setDepth(1e6 - 3);
-  const walls = WALLS.map((w) => ({ x0: hx + (w.y0 === HH - 6 && w.x0 === 0 ? SOUTH_LEFT_X0 : w.x0), y0: hy + w.y0, x1: hx + w.x1, y1: hy + w.y1, h: w.h }));
-  return { x: hx, y: hy, w: HW, h: HH, walls, roof, parts };
+  const roof = scene.add.image(bx0, by0 - rMargin, "house_roof").setOrigin(0).setScale(1 / K).setDepth(1e6 - 3);
+  const walls: WallBox[] = WALLS.map((w) => {
+    const x0 = w.y0 === HH - 6 && w.x0 === 0 ? SOUTH_LEFT_X0 : w.x0;
+    const m = toW((x0 + w.x1) / 2, (w.y0 + w.y1) / 2), ex = (w.x1 - x0) / 2, ey = (w.y1 - w.y0) / 2;
+    const pts = [toW(x0, w.y0), toW(w.x1, w.y0), toW(w.x1, w.y1), toW(x0, w.y1)];
+    return { cx: m.x, cy: m.y, ex, ey, c, s, h: w.h, pts };
+  });
+  return { cx, cy, c, s, w: HW, h: HH, bx0, by0, bx1, by1, walls, roof, parts };
 }
 
 /** выпуклая оболочка точек (для тени стены от солнца) */

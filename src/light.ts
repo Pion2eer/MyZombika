@@ -58,7 +58,15 @@ export interface Sun {
 }
 
 /** круг, отбрасывающий тень; obj — его картинка: сам предмет остаётся освещённым (тень только за ним) */
-export interface Circle { x: number; y: number; r: number; obj?: Phaser.GameObjects.Image | Phaser.GameObjects.Container; hide?: Phaser.GameObjects.GameObject & { visible: boolean } }
+export interface Circle {
+  x: number; y: number; r: number; obj?: Phaser.GameObjects.Image | Phaser.GameObjects.Container; hide?: Phaser.GameObjects.GameObject & { visible: boolean };
+  /** движется (монстр, игрок): такие тени можно склеивать и упрощать */
+  move?: boolean;
+  /** несколько предметов в одной склеенной тени */
+  objs?: (Phaser.GameObjects.Image | Phaser.GameObjects.Container)[];
+  /** стена: углы многоугольника вместо круга */
+  poly?: { x: number; y: number }[];
+}
 
 interface Caster { img: Phaser.GameObjects.Image; c: Phaser.GameObjects.Container; sh: Phaser.GameObjects.Image; h: number; size: number }
 interface TreeCaster { img: Phaser.GameObjects.Image; c: Phaser.GameObjects.Container; sh: Phaser.GameObjects.Image }
@@ -264,16 +272,85 @@ export class Lighting {
     else this.overlayLight(px, py, aim, flash, muzzle, occ);
   }
 
+  /**
+   * Подробность теней фонаря: 2 — полутень в три слоя и силуэты вблизи, 1 — один клин и круглые «просветы»,
+   * 0 — тени только от неподвижного (деревья, камни, стены). Снижается сама, если кадров мало (см. adapt).
+   */
+  detail = 2;
+  private fpsLow = 0; private fpsHigh = 0;
+  /** пул мягких кругов для «вырезания» освещённых предметов из тени одним проходом */
+  private dots: Phaser.GameObjects.Image[] = [];
+  /** подстройка подробности по времени кадра: долго медленно — проще, долго быстро — подробнее */
+  adapt(dtMs: number, max: number) {
+    const night = 1 - this.sun.day;
+    if (night < 0.3) return;
+    if (dtMs > 26) { this.fpsLow += dtMs; this.fpsHigh = 0; } else if (dtMs < 19) { this.fpsHigh += dtMs; this.fpsLow = 0; }
+    if (this.fpsLow > 2500 && this.detail > 0) { this.detail--; this.fpsLow = 0; }
+    if (this.fpsHigh > 8000 && this.detail < max) { this.detail++; this.fpsHigh = 0; }
+    if (this.detail > max) this.detail = max;
+  }
+
   /** тени от фонаря: клин за каждым кругом (в маленькой текстуре — края мягкие); сами предметы из тени вырезаны */
-  private shadowMask(lx: number, ly: number, px: number, py: number, ox: number, oy: number, occ: Circle[]) {
+  private shadowMask(lx: number, ly: number, px: number, py: number, ox: number, oy: number, occ: Circle[], aim: number) {
     const g = this.occl.clear().setScale(1 / SH);
     const far = this.CONE + 60;
+    // 1) только то, что в свету: в пятне вокруг героя или в луче фонаря
+    type O = Circle & { d: number; th: number };
+    let list: O[] = [];
     for (const o of occ) {
-      const dx = o.x - px, dy = o.y - py, d = Math.hypot(dx, dy);
+      if (this.detail === 0 && o.move) continue;
+      const dx = o.x - px, dy = o.y - py;
+      if (o.poly) {
+        const d = Math.min(...o.poly.map((q) => Math.hypot(q.x - px, q.y - py)));
+        if (d > far || Math.hypot(dx, dy) < 4) continue;
+        list.push({ ...o, d, th: Math.atan2(dy, dx) });
+        continue;
+      }
+      const d = Math.hypot(dx, dy);
       if (d <= o.r + 2 || d - o.r > far) continue;
-      const th = Math.atan2(dy, dx), al0 = Math.asin(Math.min(1, o.r / d)), tl = Math.sqrt(Math.max(0, d * d - o.r * o.r));
+      const th = Math.atan2(dy, dx);
+      if (d - o.r > this.R * 0.9 && Math.abs(Phaser.Math.Angle.Wrap(th - aim)) > 0.5 + Math.asin(Math.min(1, o.r / d))) continue;
+      list.push({ ...o, d, th });
+    }
+    // 2) монстры вплотную друг к другу — одна общая тень (круг, охватывающий обоих)
+    const mov = list.filter((o) => o.move && !o.poly), rest = list.filter((o) => !o.move || o.poly);
+    for (let i = 0; i < mov.length; i++) {
+      const a = mov[i];
+      for (let j = i + 1; j < mov.length; j++) {
+        const b = mov[j], dd = Math.hypot(a.x - b.x, a.y - b.y);
+        if (dd > a.r + b.r + 5) continue;
+        // охватывающий круг
+        const R = (dd + a.r + b.r) / 2, t = dd > 0.01 ? (R - a.r) / dd : 0;
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        const objs = [...(a.objs ?? (a.obj ? [a.obj] : [])), ...(b.objs ?? (b.obj ? [b.obj] : []))];
+        mov[i] = { ...a, x, y, r: Math.max(R, a.r, b.r), objs, obj: undefined, d: Math.hypot(x - px, y - py), th: Math.atan2(y - py, x - px) };
+        mov.splice(j, 1);
+        j = i; // круг вырос — проверяем остальных заново
+      }
+    }
+    list = rest.concat(mov);
+    const layers = this.detail >= 2 ? ([[0.06, 0.3], [0.03, 0.45], [0, 1]] as const) : ([[0.02, 1]] as const);
+    for (const o of list) {
+      if (o.poly) {
+        // стена: клин от двух крайних (по углу от света) углов
+        let lo = Infinity, hi = -Infinity, cl = { x: 0, y: 0 }, ch = { x: 0, y: 0 };
+        for (const c of o.poly) {
+          const a = Phaser.Math.Angle.Wrap(Math.atan2(c.y - py, c.x - px) - o.th);
+          if (a < lo) { lo = a; cl = c; }
+          if (a > hi) { hi = a; ch = c; }
+        }
+        const A = o.th + lo, B = o.th + hi, F = far * 1.5;
+        g.fillStyle(0xffffff, 1).fillPoints([
+          { x: cl.x - ox, y: cl.y - oy }, { x: lx + Math.cos(A) * F, y: ly + Math.sin(A) * F },
+          { x: lx + Math.cos(o.th) * F, y: ly + Math.sin(o.th) * F },
+          { x: lx + Math.cos(B) * F, y: ly + Math.sin(B) * F }, { x: ch.x - ox, y: ch.y - oy },
+        ], true);
+        continue;
+      }
+      const { d, th } = o, dx = o.x - px, dy = o.y - py;
+      const al0 = Math.asin(Math.min(1, o.r / d)), tl = Math.sqrt(Math.max(0, d * d - o.r * o.r));
       // полутень: ядро и два более широких слоя послабее
-      for (const [wid, alpha] of [[0.06, 0.3], [0.03, 0.45], [0, 1]] as const) {
+      for (const [wid, alpha] of layers) {
         const al = Math.max(0.01, al0 - 0.02 + wid);
         const a1 = th - al, a2 = th + al;
         g.fillStyle(0xffffff, alpha);
@@ -288,20 +365,32 @@ export class Lighting {
       }
     }
     const S = this.shad.clear().draw(g);
-    // предмет сам освещён: вырезаем его силуэт из тени
-    for (const o of occ) {
-      if (!o.obj) continue;
-      const hv = o.hide?.visible;
-      if (o.hide) o.hide.visible = false;
-      const sx = o.obj.scaleX, sy = o.obj.scaleY;
-      // силуэт чуть меньше настоящего: размытый край уходит внутрь предмета, а не светится ореолом вокруг
-      const w = o.obj instanceof Phaser.GameObjects.Image ? o.obj.displayWidth : 30;
-      const shrink = Math.max(0.6, 1 - (SH * 2.4) / Math.max(20, w));
-      o.obj.setScale((sx * shrink) / SH, (sy * shrink) / SH);
-      S.erase(o.obj, (o.obj.x - ox) / SH, (o.obj.y - oy) / SH);
-      o.obj.setScale(sx, sy);
-      if (o.hide) o.hide.visible = !!hv;
+    // предмет сам освещён: вырезаем его из тени. Вблизи (и при полной подробности) — точный силуэт,
+    // остальное — мягкий круг; круги вырезаются все разом одним проходом
+    const dots: Phaser.GameObjects.Image[] = [];
+    const dot = (x: number, y: number, r: number) => {
+      const im = this.dots[dots.length] ?? (this.dots[dots.length] = this.scene.make.image({ key: "lt_lamp" }, false));
+      dots.push(im.setPosition((x - ox) / SH, (y - oy) / SH).setDisplaySize((r * 2.1) / SH, (r * 2.1) / SH));
+    };
+    for (const o of list) {
+      if (o.poly) continue;
+      const objs = o.objs ?? (o.obj ? [o.obj] : []);
+      for (const ob of objs) {
+        const exact = this.detail >= 2 && (!o.move || o.d < 260);
+        if (!exact) { dot(ob.x, ob.y - (o.move ? 8 : 0), o.move ? 11 : o.r); continue; }
+        const hv = o.hide?.visible;
+        if (o.hide) o.hide.visible = false;
+        const sx = ob.scaleX, sy = ob.scaleY;
+        // силуэт чуть меньше настоящего: размытый край уходит внутрь предмета, а не светится ореолом вокруг
+        const w = ob instanceof Phaser.GameObjects.Image ? ob.displayWidth : 30;
+        const shrink = Math.max(0.6, 1 - (SH * 2.4) / Math.max(20, w));
+        ob.setScale((sx * shrink) / SH, (sy * shrink) / SH);
+        S.erase(ob, (ob.x - ox) / SH, (ob.y - oy) / SH);
+        ob.setScale(sx, sy);
+        if (o.hide) o.hide.visible = !!hv;
+      }
     }
+    if (dots.length) S.erase(dots);
     return S;
   }
 
@@ -321,7 +410,7 @@ export class Lighting {
     if (k > 0.02) {
       L.draw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setTint(0xe08a3c).setAlpha(this.LAMP * k).setBlendMode(Phaser.BlendModes.ADD));
       L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setTint(0xfff2dc).setAlpha(this.BEAM * k).setBlendMode(Phaser.BlendModes.ADD));
-      if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
+      if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ, aim));
     }
     // вспышка выстрела — тёплая, у дула
     if (flash > 0) L.draw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.6, this.R * 1.6).setTint(0xffb050).setAlpha(flash * (0.25 + 0.5 * night)).setBlendMode(Phaser.BlendModes.ADD));
@@ -353,7 +442,7 @@ export class Lighting {
     L.draw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setAlpha(this.LAMP));
     L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setAlpha(1));
     // 2) тени: клин за каждым кругом, вырезаем из света
-    if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
+    if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ, aim));
     // сами предметы и враги освещены со стороны фонаря: рисуем их силуэт светом нужной яркости
     for (const o of occ) {
       if (!o.obj) continue;

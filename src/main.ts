@@ -5,8 +5,10 @@
 import Phaser from "phaser";
 import { sfx, setSound, toggleMute, unlockAudio } from "./sfx";
 import { t, type Key } from "./i18n";
+// на телефоне подсказки без названий клавиш: «Позвать друга (H)» → «Позвать друга»
+const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu } from "./menu";
-import { buildHouse, hull, type House, type WallBox } from "./house";
+import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
 import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
@@ -58,6 +60,8 @@ export const S = (window as any).S = {
   armor: 0, medkits: 0, inv: false, hits: [] as Hit[],
   /** открыт главный экран */
   menu: false,
+  /** на узком тачскрине (вертикально) ячейки оружия под стиками — стики и кнопки подняты на столько px */
+  lift: 0,
   msg: "", msgT: 0, daytime: "", net: "", chatOpen: false, chat: [] as { who: string; text: string; t: number; me: boolean }[], myName: "Player 1", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
 };
 
@@ -531,7 +535,7 @@ class Game extends Phaser.Scene {
       S.touch = p.wasTouch;
       if (!p.wasTouch) { if (p.rightButtonDown()) this.throwNade(); return; }
       // кнопка гранаты над правым стиком
-      if (Math.hypot(p.x - (this.scale.width - 110), p.y - (this.scale.height - 235)) < 38) { this.throwNade(); return; }
+      if (Math.hypot(p.x - (this.scale.width - 110), p.y - (this.scale.height - 235 - S.lift)) < 38) { this.throwNade(); return; }
       const st = { id: p.id, ox: p.x, oy: p.y, x: p.x, y: p.y };
       if (p.x < this.scale.width / 2) { if (!S.move) S.move = st; } else if (!S.aim) S.aim = st;
     });
@@ -562,6 +566,7 @@ class Game extends Phaser.Scene {
   }
   showMenu() {
     S.menu = true;
+    this.menuStart();
     const kb = this.input.keyboard!;
     kb.enabled = false; kb.disableGlobalCapture(); kb.resetKeys();
     const code = JOIN && !autoJoined ? (JOIN.match(/[A-Za-z0-9]{5}/)?.[0] ?? "").toUpperCase() : "";
@@ -573,7 +578,66 @@ class Game extends Phaser.Scene {
       changed: () => this.applySettings(),
     }, code);
   }
+  /** точка, над которой висит камера главного экрана (медленная восьмёрка по карте) */
+  menuSpot(t: number) {
+    return { x: W / 2 + Math.sin(t * 0.045) * 700, y: H / 2 + Math.sin(t * 0.07 + 1) * 520 };
+  }
+  menuT = 0;
+  /** главный экран: зомби для фона, герой спрятан */
+  menuStart() {
+    this.menuT = Math.random() * 100;
+    this.cameras.main.stopFollow();
+    this.player.c.setVisible(false);
+    const p = this.menuSpot(this.menuT);
+    this.px = p.x; this.py = p.y;
+    const kinds: Kind[] = ["zombie", "zombie", "zombie", "spitter", "zombie", "runner", "zombie", "rat", "zombie", "spitter", "zombie", "zombie", "rat", "zombie"];
+    kinds.forEach((k, i) => {
+      const a = rand(0, TAU), d = rand(60, 520);
+      const q = this.collide(Phaser.Math.Clamp(p.x + Math.cos(a) * d, 80, W - 80), Phaser.Math.Clamp(p.y + Math.sin(a) * d, 80, H - 80), KINDS[k].r);
+      const e = this.addEnemy(k, q.x, q.y, -1 - i);
+      e.a = rand(0, TAU); e.tx = e.x; e.ty = e.y; e.st = rand(0, 3);
+    });
+  }
+  menuWorld(dt: number) {
+    this.menuT += dt;
+    const p = this.menuSpot(this.menuT), cam = this.cameras.main;
+    this.px = p.x; this.py = p.y;
+    cam.centerOn(p.x, p.y);
+    this.aimA = this.menuT * 0.15;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      // бредёт к случайной точке рядом с камерой, иногда стоит и качается
+      e.st -= dt;
+      if (e.st <= 0 || Math.hypot(e.tx - e.x, e.ty - e.y) < 12) {
+        e.st = rand(4, 9);
+        const a = rand(0, TAU), d = rand(80, 420);
+        e.tx = Phaser.Math.Clamp(p.x + Math.cos(a) * d, 80, W - 80); e.ty = Phaser.Math.Clamp(p.y + Math.sin(a) * d, 80, H - 80);
+      }
+      const far = Math.hypot(p.x - e.x, p.y - e.y) > 650; // отстал от камеры — догоняет
+      const dx = e.tx - e.x, dy = e.ty - e.y, d = Math.hypot(dx, dy) || 1;
+      const idle = e.st > 7.5 && !far;
+      const spd = idle ? 0 : (e.kind === "rat" ? 70 : e.kind === "runner" ? 45 : 22) * (far ? 2.5 : 1);
+      if (spd) {
+        const want = Math.atan2(dy, dx);
+        e.a += Phaser.Math.Angle.Wrap(want - e.a) * Math.min(1, dt * 2.5);
+        const q = this.collide(e.x + Math.cos(e.a) * spd * dt, e.y + Math.sin(e.a) * spd * dt, KINDS[e.kind].r);
+        if (Math.hypot(q.x - e.x, q.y - e.y) < spd * dt * 0.3) e.st = 0; // упёрся — другая цель
+        e.x = q.x; e.y = q.y;
+        e.ph += dt * spd * 0.12;
+      }
+      e.c.setPosition(e.x, e.y).setDepth(e.y);
+      if (e.hum) e.hum.pose(e.a, e.a, e.ph, spd ? 1 : 0, false, Math.sin(this.menuT * 0.8 + e.id));
+      else if (e.img) e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
+    }
+  }
   startPlay() {
+    // зомби главного экрана уходят, игра начинается с героя в центре
+    for (const e of this.enemies) e.c.destroy();
+    this.enemies = [];
+    this.px = W / 2; this.py = H / 2;
+    this.player.c.setPosition(this.px, this.py).setVisible(true);
+    this.cameras.main.startFollow(this.player.c, true, 0.15, 0.15);
+    this.cameras.main.centerOn(this.px, this.py);
     closeMenu();
     S.menu = false;
     unlockAudio();
@@ -599,7 +663,7 @@ class Game extends Phaser.Scene {
     const hs = this.house;
     const free = (x: number, y: number, r: number) =>
       Math.hypot(x - W / 2, y - H / 2) > 220 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
-      !(x > hs.x - r - 50 && x < hs.x + hs.w + r + 50 && y > hs.y - r - 60 && y < hs.y + hs.h + r + 40);
+      !(x > hs.bx0 - r - 40 && x < hs.bx1 + r + 40 && y > hs.by0 - r - 50 && y < hs.by1 + r + 30);
     const place = (key: string, x: number, y: number, size: number, r: number, canopy: number) => {
       const img = this.add.image(x, y, key).setDisplaySize(size, size).setDepth(y);
       // дерево нарисовано «вид сверху-сбоку»: ставим картинку основанием ствола в точку (x, y)
@@ -621,7 +685,7 @@ class Game extends Phaser.Scene {
     // мелочь без столкновений
     for (let i = 0; i < 420; i++) {
       const dx = rnd.between(0, W), dy = rnd.between(0, H);
-      if (dx > hs.x - 10 && dx < hs.x + hs.w + 10 && dy > hs.y - 10 && dy < hs.y + hs.h + 10) continue;
+      if (inHouse(hs, dx, dy, 10)) continue;
       const key = rnd.pick(["grass_1", "grass_2", "grass_1", "flowers_1", "flowers_2", "flowers_3", "bush_red_full", "bush_blue_full", "stone", "stone_2", "grass_2", "flowers_1"]);
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
       this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
@@ -651,11 +715,10 @@ class Game extends Phaser.Scene {
     }
     // стены дома (с тем же запасом)
     for (const w of this.walls) {
-      for (let j = Math.max(0, Math.floor((w.y0 - 13) / C)); j <= Math.min(n - 1, Math.floor((w.y1 + 13) / C)); j++)
-        for (let i = Math.max(0, Math.floor((w.x0 - 13) / C)); i <= Math.min(n - 1, Math.floor((w.x1 + 13) / C)); i++) {
-          const cx = (i + 0.5) * C, cy = (j + 0.5) * C;
-          if (Math.hypot(cx - Phaser.Math.Clamp(cx, w.x0, w.x1), cy - Phaser.Math.Clamp(cy, w.y0, w.y1)) < 13) this.blocked[j * n + i] = 1;
-        }
+      const R = Math.hypot(w.ex, w.ey) + 13;
+      for (let j = Math.max(0, Math.floor((w.cy - R) / C)); j <= Math.min(n - 1, Math.floor((w.cy + R) / C)); j++)
+        for (let i = Math.max(0, Math.floor((w.cx - R) / C)); i <= Math.min(n - 1, Math.floor((w.cx + R) / C)); i++)
+          if (wDist(w, (i + 0.5) * C, (j + 0.5) * C) < 13) this.blocked[j * n + i] = 1;
     }
   }
   /** Дейкстра от клетки героя (8 соседей, без срезания углов у препятствий) */
@@ -728,9 +791,9 @@ class Game extends Phaser.Scene {
     }
     // стены: отрезок против прямоугольника, раздутого на r
     for (const w of this.walls) {
-      const m = r + 3;
+      const m = r + 3, a = wLocal(w, x, y), b = wLocal(w, tx, ty), ldx = b.x - a.x, ldy = b.y - a.y;
       let t0 = 0, t1 = 1;
-      const ok = ([[-dx, x - (w.x0 - m)], [dx, w.x1 + m - x], [-dy, y - (w.y0 - m)], [dy, w.y1 + m - y]] as const).every(([pp, q]) => {
+      const ok = ([[-ldx, a.x + w.ex + m], [ldx, w.ex + m - a.x], [-ldy, a.y + w.ey + m], [ldy, w.ey + m - a.y]] as const).every(([pp, q]) => {
         if (pp === 0) return q >= 0;
         const tt = q / pp;
         if (pp < 0) t0 = Math.max(t0, tt); else t1 = Math.min(t1, tt);
@@ -777,14 +840,20 @@ class Game extends Phaser.Scene {
       const dx = x - o.x, dy = y - o.y, d = Math.hypot(dx, dy), m = o.r + r;
       if (d < m && d > 0.01) { x = o.x + (dx / d) * m; y = o.y + (dy / d) * m; }
     }
+    // стены (повёрнутые прямоугольники): выталкиваем в координатах стены
     for (const w of this.walls) {
-      const cx = Phaser.Math.Clamp(x, w.x0, w.x1), cy = Phaser.Math.Clamp(y, w.y0, w.y1);
-      const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+      if (Math.abs(x - w.cx) > w.ex + w.ey + r || Math.abs(y - w.cy) > w.ex + w.ey + r) continue;
+      let { x: lx, y: ly } = wLocal(w, x, y);
+      const cx = Phaser.Math.Clamp(lx, -w.ex, w.ex), cy = Phaser.Math.Clamp(ly, -w.ey, w.ey);
+      const dx = lx - cx, dy = ly - cy, d = Math.hypot(dx, dy);
       if (d >= r) continue;
-      if (d > 0.01) { x = cx + (dx / d) * r; y = cy + (dy / d) * r; continue; }
-      // центр внутри стены: выталкиваем к ближайшему краю
-      const e = [x - w.x0, w.x1 - x, y - w.y0, w.y1 - y], k = e.indexOf(Math.min(...e));
-      if (k === 0) x = w.x0 - r; else if (k === 1) x = w.x1 + r; else if (k === 2) y = w.y0 - r; else y = w.y1 + r;
+      if (d > 0.01) { lx = cx + (dx / d) * r; ly = cy + (dy / d) * r; }
+      else {
+        // центр внутри стены: к ближайшему краю
+        const e = [lx + w.ex, w.ex - lx, ly + w.ey, w.ey - ly], k = e.indexOf(Math.min(...e));
+        if (k === 0) lx = -w.ex - r; else if (k === 1) lx = w.ex + r; else if (k === 2) ly = -w.ey - r; else ly = w.ey + r;
+      }
+      ({ x, y } = wWorld(w, lx, ly));
     }
     return { x: Phaser.Math.Clamp(x, 40, W - 40), y: Phaser.Math.Clamp(y, 40, H - 40) };
   }
@@ -859,8 +928,7 @@ class Game extends Phaser.Scene {
       x = Phaser.Math.Clamp(this.px + Math.cos(a) * d, 60, W - 60);
       y = Phaser.Math.Clamp(this.py + Math.sin(a) * d, 60, H - 60);
       const hs = this.house!;
-      const inHouse = x > hs.x - 30 && x < hs.x + hs.w + 30 && y > hs.y - 30 && y < hs.y + hs.h + 30;
-      if (!inHouse && Math.hypot(x - this.px, y - this.py) > 300 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + K_.r + 4)) break;
+      if (!inHouse(hs, x, y, 30) && Math.hypot(x - this.px, y - this.py) > 300 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + K_.r + 4)) break;
     }
     this.addEnemy(kind, x, y, this.eid++);
   }
@@ -944,13 +1012,12 @@ class Game extends Phaser.Scene {
     const occ: Circle[] = [];
     const reach = L.CONE + 80;
     for (const o of this.obs) if (Math.abs(o.x - this.px) < reach + o.r && Math.abs(o.y - this.py) < reach + o.r) occ.push({ x: o.x, y: o.y, r: o.r, obj: o.img });
-    for (const e of this.enemies) if (!e.dead) occ.push({ x: e.x, y: e.y, r: KINDS[e.kind].r * 0.8, obj: e.c });
-    for (const m of this.mates.values()) occ.push({ x: m.x, y: m.y, r: 9, obj: m.hum.c });
-    // стены дома для фонаря — цепочки кругов
+    for (const e of this.enemies) if (!e.dead) occ.push({ x: e.x, y: e.y, r: KINDS[e.kind].r * 0.8, obj: e.c, move: true });
+    for (const m of this.mates.values()) occ.push({ x: m.x, y: m.y, r: 9, obj: m.hum.c, move: true });
+    // стены дома для фонаря — прямоугольники (одна тень на стену)
     for (const w of this.walls) {
-      if (w.x1 < this.px - reach || w.x0 > this.px + reach || w.y1 < this.py - reach || w.y0 > this.py + reach) continue;
-      const len = Math.max(w.x1 - w.x0, w.y1 - w.y0), n = Math.max(1, Math.round(len / 7));
-      for (let i = 0; i <= n; i++) occ.push({ x: w.x0 + ((w.x1 - w.x0) * i) / n, y: w.y0 + ((w.y1 - w.y0) * i) / n, r: 4.5 });
+      if (Math.abs(w.cx - this.px) > reach + 80 || Math.abs(w.cy - this.py) > reach + 80) continue;
+      occ.push({ x: w.cx, y: w.cy, r: 0, poly: w.pts });
     }
     const alive = !S.over;
     // время суток из настроек (у гостя — как у хозяина)
@@ -986,7 +1053,7 @@ class Game extends Phaser.Scene {
     // вспышка выстрела ночью: тень героя падает назад, от дула (днём солнце сильнее вспышки)
     const flashSh = alive && this.muzzleT > 0 && night > 0.4;
     rt.beginDraw(); // все силуэты одним проходом в текстуру
-    if (settings.quality === "low") shA = 0; // низкое качество: без длинных теней людей и зверей
+    if (settings.quality === "low" || (shA < 0.05 && !flashSh)) shA = 0; // низкое качество (или ночь): без длинных теней людей и зверей
     else if (flashSh) {
       shA = 0.25 + night * 0.4;
       humPoint(this.player, this.px, this.py, this.aimA + Math.PI, 1.6 + night);
@@ -1009,9 +1076,9 @@ class Game extends Phaser.Scene {
     if (settings.quality !== "low" && !flashSh && SHADOW_ALPHA * sun.day > 0.01 && this.walls.length) {
       const g = (this.wallShG ??= this.make.graphics({}, false)).clear().fillStyle(0x000000);
       for (const w of this.walls) {
-        if (!onView((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2)) continue;
+        if (!onView(w.cx, w.cy)) continue;
         const d = w.h * sun.len * SHADOW, sx = Math.cos(sun.ang) * d, sy = Math.sin(sun.ang) * d;
-        const pts = [{ x: w.x0, y: w.y0 }, { x: w.x1, y: w.y0 }, { x: w.x1, y: w.y1 }, { x: w.x0, y: w.y1 }];
+        const pts = w.pts;
         g.fillPoints(hull([...pts, ...pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))]).map((q) => ({ x: q.x - ox, y: q.y - oy })), true);
       }
       rt.draw(g);
@@ -1164,7 +1231,7 @@ class Game extends Phaser.Scene {
       if (NET.role !== "client" && !S.over && !this.dead && it.life > 0 && Math.hypot(it.x - this.px, it.y - this.py) < 24 && it.vz === 0) {
         if (it.kind === "medkit" && S.medkits < MAX_MED) {
           S.medkits++;
-          sfx("pickup"); S.msg = t("got_med"); S.msgT = 0.9; it.life = 0;
+          sfx("pickup"); S.msg = tk("got_med"); S.msgT = 0.9; it.life = 0;
         } else if (it.kind === "armor" && S.armor < 100) {
           S.armor = Math.min(100, S.armor + 50);
           sfx("armor"); S.msg = t("got_armor"); S.msgT = 0.9; it.life = 0;
@@ -1376,9 +1443,9 @@ class Game extends Phaser.Scene {
     if ((S.paused || S.inv) && NET.role === "solo") return;
     const dt = Math.min(0.05, dtMs / 1000);
     if (S.menu) {
-      // за главным экраном — живой мир: герой стоит, свет меняется
+      // за главным экраном — живой мир: камера медленно плывёт над картой, бродят зомби
+      this.menuWorld(dt);
       if (!document.hidden) this.updateLight(dt);
-      this.player.pose(this.aimA, this.moveA, 0, 0);
       this.aimG.clear();
       return;
     }
@@ -1392,7 +1459,7 @@ class Game extends Phaser.Scene {
     this.updateItems(dt);
     this.drawFx(dt);
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
-    if (!document.hidden) this.updateLight(dt);
+    if (!document.hidden) { this.light.adapt(dtMs, settings.quality === "high" ? 2 : 1); this.updateLight(dt); }
     if (S.over) { this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return; }
 
     // ── ходьба ──
@@ -1482,7 +1549,7 @@ class Game extends Phaser.Scene {
       const step = BS * dt;
       let hit = false;
       // стены дома: пуля застревает в досках
-      if (b.d > 0) for (const w of this.walls) if (b.x > w.x0 && b.x < w.x1 && b.y > w.y0 && b.y < w.y1) {
+      if (b.d > 0) for (const w of this.walls) if (wDist(w, b.x, b.y) === 0) {
         hit = true;
         sfx("thunk", this.near(b.x, b.y) * 0.8);
         this.blood.setParticleTint(0x7a5432);
@@ -1547,7 +1614,7 @@ class Game extends Phaser.Scene {
 
     // ── крыша дома: прозрачная, пока ты внутри ──
     if (this.house) {
-      const hs = this.house, inside = this.px > hs.x && this.px < hs.x + hs.w && this.py > hs.y && this.py < hs.y + hs.h + 4;
+      const hs = this.house, inside = inHouse(hs, this.px, this.py, 2);
       hs.roof.setAlpha(Phaser.Math.Linear(hs.roof.alpha, inside ? 0.1 : 1, 0.15));
     }
     // ── кроны деревьев: прозрачные, если под ними кто-то есть ──
@@ -1925,7 +1992,7 @@ class Game extends Phaser.Scene {
       case "give":
         if (m.k === "grenade") { S.grenades++; sfx("pickup"); S.msg = t("got_nade"); }
         else if (m.k === "armor") { sfx("armor"); S.msg = t("got_armor"); }
-        else { S.medkits = Math.min(MAX_MED, S.medkits + 1); sfx("pickup"); S.msg = t("got_med"); }
+        else { S.medkits = Math.min(MAX_MED, S.medkits + 1); sfx("pickup"); S.msg = tk("got_med"); }
         S.msgT = 0.9;
         break;
       case "fx":
@@ -2154,7 +2221,7 @@ class UI extends Phaser.Scene {
       const W_ = WEAPONS[id], sx = rx + i * (sw + 8), sel = S.weapon === i, own = S.owned[i];
       g.fillStyle(sel ? 0x4a3c1c : 0x2a241a, 1).fillRoundedRect(sx, sy, sw, sh, 8).lineStyle(2, sel ? 0xffe2a0 : 0x5a5040, sel ? 1 : 0.8).strokeRoundedRect(sx, sy, sw, sh, 8);
       const am = id === "grenade" ? `${S.grenades}` : `${S.clip[id]}/${W_.mag}`;
-      text(sx + sw / 2, sy + sh / 2, own ? `${i + 1}\n${wname(id)}\n${am}` : `${i + 1}\n—`, 13, sel ? "#ffe2a0" : "#f2ead8");
+      text(sx + sw / 2, sy + sh / 2, own ? `${S.touch ? "" : `${i + 1}\n`}${wname(id)}\n${am}` : S.touch ? "—" : `${i + 1}\n—`, 13, sel ? "#ffe2a0" : "#f2ead8");
       if (own) hits.push({ x: sx, y: sy, w: sw, h: sh, fn: () => gm.selectWeapon(i) });
     });
     // предметы
@@ -2167,7 +2234,7 @@ class UI extends Phaser.Scene {
     const mx = rx + iw + 8;
     g.fillStyle(S.medkits ? 0x4a1c1c : 0x2a241a, 1).fillRoundedRect(mx, iy, iw, ih, 8).lineStyle(2, S.medkits ? 0xff7060 : 0x5a5040, 0.8).strokeRoundedRect(mx, iy, iw, ih, 8);
     g.fillStyle(0xeeeeee).fillRoundedRect(mx + 12, iy + 16, 24, 20, 3).fillStyle(0xd83a2a).fillRect(mx + 21, iy + 19, 6, 14).fillRect(mx + 17, iy + 23, 14, 6);
-    text(mx + 44, iy + ih / 2, `${t("meds")}: ${S.medkits}/${MAX_MED}\n${t("med_use", { n: MED_HEAL })}`, 12, "#f2ead8", 0);
+    text(mx + 44, iy + ih / 2, `${t("meds")}: ${S.medkits}/${MAX_MED}\n${S.touch ? `+${MED_HEAL}` : t("med_use", { n: MED_HEAL })}`, 12, "#f2ead8", 0);
     hits.push({ x: mx, y: iy, w: iw, h: ih, fn: () => gm.useMedkit() });
     text(narrow ? x0 + pw / 2 : rx + rw / 2, y0 + ph - 22, S.touch ? t("inv_close_touch") : `${t("inv_close_key")}${NET.role === "solo" ? t("paused_note") : ""}`, 12, "#a89f88");
     // клик мимо окна — закрыть
@@ -2208,11 +2275,11 @@ class UI extends Phaser.Scene {
     // ячейки оружия и рюкзак: внизу по центру (на тачскрине — между стиками, а если тесно — над кнопками справа)
     if (!S.over && !S.inv) {
       const gap = 6, sh = 44, bag = 44;
-      let sw = 80, bx: number, by: number;
+      let sw = 80, bx: number, by: number, lift = 0;
       const tot = () => SLOTS.length * sw + SLOTS.length * gap + (S.touch ? bag : 0) - (S.touch ? 0 : gap);
       if (!S.touch) { bx = (w - tot()) / 2; by = h - sh - this.help.height - 16; }
       else if (tot() <= w - 350) { bx = (w - tot()) / 2; by = h - sh - 10; }
-      else { sw = Math.min(80, (w - 24 - bag - SLOTS.length * gap) / SLOTS.length); bx = (w - tot()) / 2; by = h - 300 - sh; }
+      else { sw = Math.min(80, (w - 24 - bag - SLOTS.length * gap) / SLOTS.length); bx = (w - tot()) / 2; by = h - sh - 10; lift = sh + 18; }
       SLOTS.forEach((id, i) => {
         if (!S.owned[i]) return;
         const x = bx + i * (sw + gap), sel = S.weapon === i, W_ = WEAPONS[id];
@@ -2228,6 +2295,7 @@ class UI extends Phaser.Scene {
       g.fillStyle(0x5a4426, 1).fillRoundedRect(kx + 14, ky + 21, 14, 8, 2);
       if (!S.touch) this.bagT.setPosition(kx + 21, ky + 50).setText("I").setVisible(true);
       hits.push({ x: kx, y: ky, w: 42, h: 42, fn: () => gm.toggleInv() });
+      S.lift = lift;
     }
     // кооператив: код и число игроков
     const n = NET.conns.size + 1;
@@ -2238,7 +2306,7 @@ class UI extends Phaser.Scene {
       this.big.setPosition(w / 2, h / 2).setText(`${t("pause")}\n\n${S.touch ? t("pause_touch") : t("pause_key")}`).setFontSize(Math.min(34, w / 22)).setAlpha(1);
       // кнопки кооператива
       if (NET.role !== "client") {
-        const labels = NET.role === "host" ? [t("copy_code", { c: NET.code }), t("copy_link")] : [t("invite"), t("join_code")];
+        const labels = NET.role === "host" ? [t("copy_code", { c: NET.code }), t("copy_link")] : [tk("invite"), tk("join_code")];
         for (const [i, label] of labels.entries()) {
           const bx = w / 2 + (i ? 120 : -120), by = h * 0.68;
           g.fillStyle(0x14110d, 0.85).fillRoundedRect(bx - 105, by, 210, 50, 10).lineStyle(2, 0xffe2a0, 0.7).strokeRoundedRect(bx - 105, by, 210, 50, 10);
@@ -2272,12 +2340,12 @@ class UI extends Phaser.Scene {
     // чат: последние сообщения слева внизу, гаснут через 12 с (пока пишешь — видны все)
     const now = performance.now();
     const lines = S.chat.filter((c) => S.chatOpen || now - c.t < 12000).slice(-7);
-    this.chatT.setPosition(16, h - (S.touch ? 190 : 112)).setText(lines.map((c) => `${c.who}: ${c.text}`)).setWordWrapWidth(Math.min(460, w - 32))
+    this.chatT.setPosition(16, h - (S.touch ? 190 + S.lift : 112)).setText(lines.map((c) => `${c.who}: ${c.text}`)).setWordWrapWidth(Math.min(460, w - 32))
       .setAlpha(lines.length && !S.chatOpen ? Phaser.Math.Clamp((12000 - (now - lines[lines.length - 1].t)) / 1500, 0.35, 1) : 1);
     // стики на тачскрине
     if (S.touch && !S.over && !S.inv) {
       const stick = (st: Stick | null, label: string, col: number, defX: number) => {
-        const ox = st ? st.ox : defX, oy = st ? st.oy : h - 110;
+        const ox = st ? st.ox : defX, oy = st ? st.oy : h - 110 - S.lift;
         g.lineStyle(3, 0xffffff, st ? 0.5 : 0.25).strokeCircle(ox, oy, 55).fillStyle(0xffffff, 0.08).fillCircle(ox, oy, 55);
         let kx = ox, ky = oy;
         if (st) { const dx = st.x - ox, dy = st.y - oy, d = Math.hypot(dx, dy), m = Math.min(d, 55); if (d > 0) { kx = ox + (dx / d) * m; ky = oy + (dy / d) * m; } }
@@ -2287,12 +2355,12 @@ class UI extends Phaser.Scene {
       stick(S.move, "ход", 0xe8e0cc, 110);
       stick(S.aim, "огонь", 0xff6040, w - 110);
       // кнопка гранаты
-      const bx = w - 110, by = h - 235;
+      const bx = w - 110, by = h - 235 - S.lift;
       g.fillStyle(0x14110d, 0.45).fillCircle(bx, by, 30).lineStyle(3, 0xffffff, S.grenades ? 0.5 : 0.2).strokeCircle(bx, by, 30);
       g.fillStyle(0x5e6e2c, S.grenades ? 0.95 : 0.35).fillEllipse(bx, by + 3, 18, 22).fillStyle(0x9a9a92, S.grenades ? 0.95 : 0.35).fillRect(bx - 3, by - 13, 6, 6);
       // кнопка аптечки — левее гранаты
       if (!S.inv) {
-        const hx = w - 190, hy = h - 215, on = S.medkits > 0;
+        const hx = w - 190, hy = h - 215 - S.lift, on = S.medkits > 0;
         g.fillStyle(0x14110d, 0.45).fillCircle(hx, hy, 26).lineStyle(3, 0xffffff, on ? 0.5 : 0.2).strokeCircle(hx, hy, 26);
         g.fillStyle(0xeeeeee, on ? 0.95 : 0.3).fillRoundedRect(hx - 11, hy - 9, 22, 18, 3).fillStyle(0xd83a2a, on ? 1 : 0.35).fillRect(hx - 2.5, hy - 7, 5, 14).fillRect(hx - 7, hy - 2.5, 14, 5);
         hits.push({ x: hx - 28, y: hy - 28, w: 56, h: 56, fn: () => gm.useMedkit() });
@@ -2340,6 +2408,32 @@ const game = ((window as any).G = new Phaser.Game({
   const ua = navigator.userAgent;
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && matchMedia("(pointer: coarse)").matches);
   const standalone = matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches || (navigator as any).standalone === true;
+  // горизонтальный режим: закрепляем ориентацию (Android — только в полном экране), а в вертикальном
+  // показываем «Поверни телефон» и ставим одиночную игру на паузу, пока телефон не повернут
+  const lockLand = () => { try { const o = (screen as any).orientation; o?.lock?.("landscape")?.catch?.(() => {}); } catch { /* не умеет */ } };
+  if (mobile) {
+    if (standalone) lockLand();
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;z-index:50;display:none;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#14110d;color:#ffe2a0;font:700 22px system-ui,sans-serif;text-align:center;padding:24px";
+    ov.innerHTML = '<svg width="96" height="96" viewBox="0 0 96 96" fill="none" stroke="#ffe2a0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="30" y="14" width="36" height="62" rx="7" style="transform-origin:48px 45px;animation:mzrot 2.4s ease-in-out infinite"/><path d="M14 66a36 36 0 0 0 26 22M82 30a36 36 0 0 0-26-22"/></svg><div></div>';
+    const st = document.createElement("style");
+    st.textContent = "@keyframes mzrot{0%,25%{transform:rotate(0)}55%,100%{transform:rotate(-90deg)}}";
+    document.head.appendChild(st);
+    for (const ev of ["pointerdown", "mousedown", "touchstart", "touchend", "click"]) ov.addEventListener(ev, (e) => e.stopPropagation());
+    let autoPaused = false;
+    const check = () => {
+      const port = innerHeight > innerWidth * 1.05;
+      if (!document.body.contains(ov)) document.body.appendChild(ov);
+      (ov.lastChild as HTMLElement).textContent = t("rotate");
+      ov.style.display = port ? "flex" : "none";
+      const g = game.scene.getScene("game") as any;
+      if (!g || !g.sys?.isActive()) return;
+      if (port && !S.paused && !S.over && !S.menu && NET.role === "solo") { g.togglePause(); autoPaused = true; }
+      else if (!port && autoPaused) { autoPaused = false; if (S.paused) g.togglePause(); }
+    };
+    addEventListener("resize", check); addEventListener("orientationchange", () => setTimeout(check, 200));
+    game.events.once("ready", check); setTimeout(check, 300);
+  }
   if (mobile && !standalone) {
     const d = document as any, el = document.documentElement as any;
     const req: ((o?: object) => Promise<void> | void) | undefined = el.requestFullscreen ?? el.webkitRequestFullscreen;
@@ -2347,7 +2441,10 @@ const game = ((window as any).G = new Phaser.Game({
     const go = () => {
       if (!settings.fs || d.fullscreenElement || d.webkitFullscreenElement) return;
       if (req) {
-        try { const r = req.call(el, { navigationUI: "hide" }); if (r && (r as Promise<void>).catch) (r as Promise<void>).catch(() => {}); } catch { /* не дали */ }
+        try {
+          const r = req.call(el, { navigationUI: "hide" });
+          if (r && (r as Promise<void>).then) (r as Promise<void>).then(lockLand, () => {}); else lockLand();
+        } catch { /* не дали */ }
       } else if (!hinted && /iPhone|iPod/i.test(ua)) {
         hinted = true;
         try { if (localStorage.getItem("myzombika-ios-hint")) return; localStorage.setItem("myzombika-ios-hint", "1"); } catch { /* нет хранилища */ }
@@ -2369,7 +2466,7 @@ const game = ((window as any).G = new Phaser.Game({
       x.drawImage(src, f.cutX, f.cutY, f.cutWidth, f.cutHeight, 256 - (f.cutWidth * k) / 2, 270 - (f.cutHeight * k) / 2, f.cutWidth * k, f.cutHeight * k);
       const icon = c.toDataURL("image/png");
       const here = location.protocol.startsWith("http") ? location.origin + location.pathname : SITE;
-      const man = { name: "MyZombika", short_name: "MyZombika", start_url: here, scope: here.replace(/[^/]*$/, ""), display: "fullscreen", orientation: "any", background_color: "#1a1d14", theme_color: "#1a1d14",
+      const man = { name: "MyZombika", short_name: "MyZombika", start_url: here, scope: here.replace(/[^/]*$/, ""), display: "fullscreen", orientation: "landscape", background_color: "#1a1d14", theme_color: "#1a1d14",
         icons: [{ src: icon, sizes: "512x512", type: "image/png" }, { src: icon, sizes: "192x192", type: "image/png" }] };
       const link = document.createElement("link"); link.rel = "manifest";
       link.href = "data:application/manifest+json;charset=utf-8," + encodeURIComponent(JSON.stringify(man));
