@@ -167,6 +167,8 @@ interface Enemy {
   id: number;
   /** у гостя: куда двигать (из снимка хозяина) */
   tx: number; ty: number;
+  /** откуда плавно идём к (tx, ty) и сколько пройдено (0..1) */
+  fx?: number; fy?: number; iu?: number;
   /** текущее направление хода (плавно поворачивается к нужному) */
   hx: number; hy: number;
   /** проверка «застрял»: где был и сколько ждать до проверки */
@@ -191,7 +193,7 @@ interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; c
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
 interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; /** только для вида (у гостя): не ранит */ vis?: boolean }
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
-interface Mate { id: string; hum: Humanoid; x: number; y: number; tx: number; ty: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number }
+interface Mate { id: string; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number }
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
@@ -243,6 +245,8 @@ class Game extends Phaser.Scene {
   mouse = { x: 0, y: 0 };
   mates = new Map<string, Mate>();
   eid = 0; iid = 0; snapT = 0; inT = 0;
+  /** промежуток между снимками хозяина (сглаженный), сек — за это время монстр проходит путь между точками */
+  snapGap = 0.05; lastSnap = 0;
   /** свой герой выбыл (в кооперативе — до следующей волны) */
   dead = false;
   netNades: Phaser.GameObjects.Image[] = [];
@@ -338,7 +342,7 @@ class Game extends Phaser.Scene {
         this.togglePause(); return;
       }
       // кнопка паузы в правом верхнем углу (для тачскрина)
-      if (p.x > this.scale.width - 64 && p.y < 64) { this.togglePause(); return; }
+      if (NET.role === "solo" && p.x > this.scale.width - 64 && p.y < 64) { this.togglePause(); return; }
       // надпись с кодом вверху — копирует ссылку
       if (NET.role === "host" && p.y < 40 && Math.abs(p.x - this.scale.width / 2) < 220) { copyInvite("link"); return; }
       S.touch = p.wasTouch;
@@ -989,7 +993,8 @@ class Game extends Phaser.Scene {
     this.updateNades(dt);
     this.updateItems(dt);
     this.drawFx(dt);
-    this.updateLight(dt);
+    // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
+    if (!document.hidden) this.updateLight(dt);
     if (S.over) { this.aimG.clear(); return; }
 
     // ── ходьба ──
@@ -1310,7 +1315,7 @@ class Game extends Phaser.Scene {
   mate(id: string, x: number, y: number) {
     let m = this.mates.get(id);
     if (!m) {
-      m = { id, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: 0 };
+      m = { id, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: 0 };
       this.mates.set(id, m);
     }
     return m;
@@ -1320,7 +1325,8 @@ class Game extends Phaser.Scene {
     if (NET.role === "host") {
       if (m.t === "in") {
         const mt = this.mate(from, m.x, m.y);
-        Object.assign(mt, { tx: m.x, ty: m.y, aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, seen: this.time.now });
+        this.mateTarget(mt, m.x, m.y);
+        Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, seen: this.time.now });
       } else if (m.t === "shot") {
         const mt = this.mates.get(from);
         if (!mt || mt.dead) return;
@@ -1364,7 +1370,7 @@ class Game extends Phaser.Scene {
     if (NET.role === "host" && NET.conns.size) {
       this.snapT -= dt;
       if (this.snapT > 0) return;
-      this.snapT = 1 / 15;
+      this.snapT = 1 / 20;
       const r2 = (v: number) => Math.round(v * 100) / 100;
       const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0]];
       for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0]);
@@ -1375,13 +1381,24 @@ class Game extends Phaser.Scene {
     } else if (NET.role === "client") {
       this.inT -= dt;
       if (this.inT > 0) return;
-      this.inT = 1 / 20;
+      this.inT = 1 / 30;
       const r2 = (v: number) => Math.round(v * 100) / 100;
       send({ t: "in", x: this.px | 0, y: this.py | 0, aimA: r2(this.aimA), moveA: r2(this.moveA), ph: r2(this.ph), moving: r2(this.moving), gren: S.grenades });
     }
   }
 
+  /** новая точка напарника: идём к ней от текущего места за время между сообщениями */
+  mateTarget(mt: Mate, x: number, y: number) {
+    const now = performance.now();
+    if (mt.last) mt.gap = Phaser.Math.Clamp(mt.gap * 0.8 + ((now - mt.last) / 1000) * 0.2, 0.02, 0.3);
+    mt.last = now;
+    mt.fx = mt.x; mt.fy = mt.y; mt.tx = x; mt.ty = y; mt.iu = 0;
+  }
+
   applySnap(m: Record<string, any>) {
+    const now = performance.now();
+    if (this.lastSnap) this.snapGap = Phaser.Math.Clamp(this.snapGap * 0.8 + ((now - this.lastSnap) / 1000) * 0.2, 0.02, 0.3);
+    this.lastSnap = now;
     S.wave = m.w; S.kills = m.k; S.score = m.s;
     if (Math.abs(this.light.t - m.lt) > 0.003) this.light.t = m.lt;
     if (m.o && !S.over) { S.over = true; sfx("over"); }
@@ -1397,7 +1414,8 @@ class Game extends Phaser.Scene {
       }
       seen.add(id);
       const mt = this.mate(id, x, y);
-      Object.assign(mt, { tx: x, ty: y, aimA, moveA, moving, ph, hp });
+      this.mateTarget(mt, x, y);
+      Object.assign(mt, { aimA, moveA, moving, ph, hp });
       if (muz) mt.muzzle = Math.max(mt.muzzle, 0.05);
       if (dead && !mt.dead) { mt.hum.body.setTint(0x777777); mt.hum.head.setTint(0x777777); mt.hum.back.clear(); mt.hum.front.clear(); }
       if (!dead && mt.dead) { mt.hum.body.clearTint(); mt.hum.head.clearTint(); }
@@ -1413,6 +1431,7 @@ class Game extends Phaser.Scene {
       let e = byId.get(id);
       if (!e) { e = this.addEnemy(KIND_LIST[k], x, y, id); e.a = a; }
       if (e.dead) continue;
+      e.fx = e.x; e.fy = e.y; e.iu = 0;
       e.tx = x; e.ty = y; e.a = a; e.ph = ph;
       if (hit) e.hitT = 0.07;
       if (e.hum) for (const side of [0, 1]) if (e.hum.armsOn[side] && !(arms & (1 << side))) e.hum.armsOn[side] = false;
@@ -1437,12 +1456,13 @@ class Game extends Phaser.Scene {
 
   /** гость: монстры двигаются к присланным хозяином точкам */
   clientEnemies(dt: number) {
-    const k = Math.min(1, dt * 12);
     for (const e of this.enemies) {
       if (e.dead) continue;
-      const moved = Math.hypot(e.tx - e.x, e.ty - e.y);
-      e.x += (e.tx - e.x) * k; e.y += (e.ty - e.y) * k;
-      if (moved > 200) { e.x = e.tx; e.y = e.ty; }
+      // ровное движение между двумя последними точками хозяина (без рывков)
+      e.iu = (e.iu ?? 1) + dt / this.snapGap;
+      const u = Math.min(1, e.iu), fx = e.fx ?? e.tx, fy = e.fy ?? e.ty;
+      e.x = fx + (e.tx - fx) * u; e.y = fy + (e.ty - fy) * u;
+      if (Math.hypot(e.tx - fx, e.ty - fy) > 200) { e.x = e.tx; e.y = e.ty; }
       e.c.setPosition(e.x, e.y).setDepth(e.y);
       e.hitT -= dt;
       if (e.hum) { e.hum.pose(e.a, e.a, e.ph, 1, false, Math.sin(e.ph * 0.5)); e.hum.flash(e.hitT > 0); }
@@ -1460,10 +1480,11 @@ class Game extends Phaser.Scene {
 
   /** напарники: плавно к последней присланной точке */
   updateMates(dt: number) {
-    const k = Math.min(1, dt * 12);
     for (const m of this.mates.values()) {
-      if (Math.hypot(m.tx - m.x, m.ty - m.y) > 200) { m.x = m.tx; m.y = m.ty; }
-      m.x += (m.tx - m.x) * k; m.y += (m.ty - m.y) * k;
+      m.iu = (m.iu ?? 1) + dt / m.gap;
+      const u = Math.min(1, m.iu), fx = m.fx ?? m.tx, fy = m.fy ?? m.ty;
+      m.x = fx + (m.tx - fx) * u; m.y = fy + (m.ty - fy) * u;
+      if (Math.hypot(m.tx - fx, m.ty - fy) > 200) { m.x = m.tx; m.y = m.ty; }
       m.muzzle -= dt;
       m.hum.c.setPosition(m.x, m.y).setDepth(m.y);
       if (!m.dead) m.hum.pose(m.aimA, m.moveA, m.ph, m.moving, m.muzzle > 0);
@@ -1524,8 +1545,8 @@ class UI extends Phaser.Scene {
     } else {
       this.big.setPosition(w / 2, h * 0.28).setText(S.msg).setFontSize(42).setAlpha(Phaser.Math.Clamp(S.msgT, 0, 1));
     }
-    // кнопка паузы
-    if (!S.over) {
+    // кнопка паузы (в кооперативе мир не останавливается — кнопки нет)
+    if (!S.over && NET.role === "solo") {
       g.fillStyle(0x14110d, 0.55).fillRoundedRect(w - 54, 12, 42, 42, 8);
       g.fillStyle(0xf2ead8, 0.9);
       if (S.paused) g.fillTriangle(w - 41, 22, w - 41, 44, w - 22, 33);
@@ -1551,7 +1572,7 @@ class UI extends Phaser.Scene {
   }
 }
 
-(window as any).G = new Phaser.Game({
+const game = ((window as any).G = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
   backgroundColor: "#2a3020",
@@ -1559,4 +1580,23 @@ class UI extends Phaser.Scene {
   input: { activePointers: 4 },
   render: { antialias: true },
   scene: [Game, UI],
-});
+}));
+
+// Фоновая вкладка: браузер останавливает requestAnimationFrame, и игра замирает. В кооперативе это ломает связь
+// (хозяин перестаёт рассылать мир, гость — свои движения), поэтому, пока вкладка скрыта, шагаем игру сами
+// по таймеру из воркера (таймеры воркера браузер почти не притормаживает).
+{
+  let last = performance.now();
+  const step = () => {
+    const now = performance.now();
+    if (!document.hidden || NET.role === "solo") { last = now; return; }
+    game.headlessStep(now, Math.min(100, now - last));
+    last = now;
+  };
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 50);"], { type: "text/javascript" })));
+    w.onmessage = step;
+  } catch {
+    setInterval(step, 50);
+  }
+}
