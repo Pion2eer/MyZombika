@@ -97,6 +97,8 @@ export class Lighting {
   private fx?: LightFX;
   /** излучающие сами по себе (глаза зомби) — рисуются в карту света */
   emissive: Phaser.GameObjects.Graphics[] = [];
+  /** другие источники света на этот кадр (костры, фонари, взрывы): яркость уже с учётом ночи и мерцания */
+  extra: { x: number; y: number; r: number; col: number; a: number }[] = [];
   private glow!: Phaser.GameObjects.Image;
   private flashGlow!: Phaser.GameObjects.Image;
   private tint!: Phaser.GameObjects.Rectangle;
@@ -219,6 +221,13 @@ export class Lighting {
    * Тень дерева: картинка дерева, «положенная на землю» от основания ствола в сторону от солнца
    * (верх картинки уходит по направлению тени), длина — по высоте солнца.
    */
+  /** убрать тень предмета (бочку взорвали, ящик разбили) */
+  removeShadow(img: Phaser.GameObjects.Image) {
+    for (const t of this.trees) if (t.img === img) t.c.destroy();
+    for (const c of this.casters) if (c.img === img) c.c.destroy();
+    this.trees = this.trees.filter((t) => t.img !== img);
+    this.casters = this.casters.filter((c) => c.img !== img);
+  }
   addTree(img: Phaser.GameObjects.Image) {
     // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер
     const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - img.originY)
@@ -418,6 +427,11 @@ export class Lighting {
       L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setTint(0xfff2dc).setAlpha(this.BEAM * k).setBlendMode(Phaser.BlendModes.ADD));
       if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ, aim));
     }
+    // костры, фонари, взрывы (без теней)
+    for (const e of this.extra) {
+      if (e.a < 0.01 || e.x + e.r < ox || e.y + e.r < oy || e.x - e.r > ox + M.width || e.y - e.r > oy + M.height) continue;
+      L.draw(this.lampImg.setPosition(e.x - ox, e.y - oy).setDisplaySize(e.r * 2, e.r * 2).setTint(e.col).setAlpha(Math.min(1, e.a)).setBlendMode(Phaser.BlendModes.ADD));
+    }
     // вспышка выстрела — тёплая, у дула
     if (flash > 0) L.draw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.6, this.R * 1.6).setTint(0xffb050).setAlpha(flash * (0.25 + 0.5 * night)).setBlendMode(Phaser.BlendModes.ADD));
     M.draw(this.light.setBlendMode(Phaser.BlendModes.ADD), 0, 0);
@@ -461,6 +475,7 @@ export class Lighting {
       o.obj.setAlpha(a0);
       if (o.hide) o.hide.visible = !!hv;
     }
+    for (const e of this.extra) if (e.a > 0.01) L.draw(this.lampImg.setPosition(e.x - ox, e.y - oy).setDisplaySize(e.r * 2, e.r * 2).setAlpha(Math.min(1, e.a)));
     // вспышка выстрела освещает всё вокруг на миг (без теней — она короткая)
     if (flash > 0) L.draw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.8, this.R * 1.8).setAlpha(flash * 0.6));
 

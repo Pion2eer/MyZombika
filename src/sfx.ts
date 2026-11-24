@@ -2,7 +2,7 @@
 export type Sfx =
   | "shot" | "casing" | "empty" | "reload" | "hit" | "splat" | "gore" | "thunk" | "ricochet"
   | "step" | "hurt" | "groan" | "growl" | "squeak" | "roar" | "wave" | "over"
-  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor";
+  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate";
 
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
@@ -10,7 +10,7 @@ let noiseBuf: AudioBuffer | null = null;
 let muted = false;
 const last: Partial<Record<Sfx, number>> = {};
 /** не чаще, чем раз в N секунд (иначе каша из одинаковых звуков) */
-const GAP: Partial<Record<Sfx, number>> = { hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
+const GAP: Partial<Record<Sfx, number>> = { clang: 0.05, crate: 0.08, hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
 
 let volume = 0.9;
 export function toggleMute() { muted = !muted; if (out) out.gain.value = muted ? 0 : volume; return muted; }
@@ -130,6 +130,17 @@ export function sfx(kind: Sfx, vol = 1) {
       noise(t, 0.35, 0.5 * v, "lowpass", 1800, 120);
       tone(t, 0.25, 0.3 * v, "sine", 110, 40);
       noise(t + 0.08, 0.2, 0.2 * v, "bandpass", 500, 200, 2);
+      break;
+    case "clang": // пуля в железо (бочка, столб): звон
+      click(t, 0.3 * v, 3200);
+      tone(t, 0.35, 0.09 * v, "triangle", rnd(1400, 1900), rnd(1300, 1800));
+      tone(t, 0.25, 0.05 * v, "sine", rnd(3100, 3900));
+      break;
+    case "crate": // ящик разлетелся: треск досок
+      noise(t, 0.12, 0.45 * v, "bandpass", 1400, 500, 1.5);
+      tone(t, 0.12, 0.25 * v, "triangle", 180, 90);
+      noise(t + 0.06, 0.18, 0.25 * v, "bandpass", 900, 300, 2);
+      click(t + 0.12, 0.2 * v, 900);
       break;
     case "thunk": // в дерево
       tone(t, 0.08, 0.2 * v, "triangle", 260, 140);

@@ -10,6 +10,7 @@ const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).r
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
 import { HUD_ART, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
+import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
@@ -336,7 +337,14 @@ interface Gib {
 }
 const MEAT = [0x6a1a14, 0x8a2a20, 0x4a0e0a, 0xa0443a];
 const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan" };
-interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number }
+interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number; /** предмет (бочка, ящик…) */ prop?: Prop; /** стоит «вертикально» (тень как у дерева) */ upright?: boolean; /** низкий — пули летят над ним */ low?: boolean }
+type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires";
+/** предмет на карте. Разрушаемые: бочка (взрывается), ящик (ломается, иногда с находкой) */
+interface Prop { id: number; kind: PropKind; x: number; y: number; hp: number; img: Phaser.GameObjects.Image; ob?: Ob; wall?: WallBox; dead: boolean;
+  /** свет: костёр — всегда (ночью ярче), фонарь — ночью; flick — сила мерцания */
+  light?: { dx: number; dy: number; r: number; col: number; a: number; flick: number; night: boolean }; fire?: Phaser.GameObjects.Particles.ParticleEmitter }
+/** горящее пятно после взрыва бочки: жжёт, светится, гаснет */
+interface Burn { x: number; y: number; t: number; fire: Phaser.GameObjects.Particles.ParticleEmitter; tick: number }
 /** где у дерева на картинке основание ствола (доля высоты): картинка ставится основанием в точку ствола */
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
 interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; dmg: number; kb: number; /** длина трассера */ tr: number; /** только для вида (у гостя): не ранит */ vis?: boolean }
@@ -419,17 +427,22 @@ class Game extends Phaser.Scene {
   /** свой герой выбыл (в кооперативе — до следующей волны) */
   dead = false;
   netNades: Phaser.GameObjects.Image[] = [];
+  props: Prop[] = [];
+  burns: Burn[] = [];
   constructor() { super("game"); }
 
   preload() {
     // картинки встроены прямо в сборку (data URI) — игра открывается двойным кликом по html без сервера
     for (const [path, url] of Object.entries(SPRITES)) this.load.image(path.split("/").pop()!.replace(".png", ""), url);
+    loadPropFiles(this);
   }
 
   create() {
     Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
     this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
+    this.props = []; this.burns = [];
+    makePropArt(this);
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
     makeStack(this, "hero_head", PAL_HERO, "head");
@@ -481,7 +494,7 @@ class Game extends Phaser.Scene {
     this.buildFlow();
     // свет и тени: тени от деревьев и камней
     this.light = new Lighting(this, START_T);
-    for (const o of this.obs) o.canopy ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
+    for (const o of this.obs) if (!o.low) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
     this.player = new Humanoid(this, this.px, this.py, "hero", PAL_HERO, true);
     cam.startFollow(this.player.c, true, 0.15, 0.15);
     this.actSh = this.add.renderTexture(0, 0, 8, 8).setOrigin(0).setDepth(-3.55);
@@ -703,6 +716,7 @@ class Game extends Phaser.Scene {
       else if (kind < 0.85) { const s = rnd.between(55, 110); if (free(x, y, s * 0.38)) { place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x, y, s, s * 0.38, 0); n++; } }
       else if (free(x, y, 14)) { place(rnd.pick(["dead_tree_1", "dead_tree_2"]), x, y, rnd.between(100, 130), 12, 45); n++; }
     }
+    this.buildProps(rnd, free);
     // мелочь без столкновений
     for (let i = 0; i < 420; i++) {
       const dx = rnd.between(0, W), dy = rnd.between(0, H);
@@ -711,6 +725,192 @@ class Game extends Phaser.Scene {
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
       this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
     }
+  }
+
+  // ───────── предметы на карте ─────────
+  buildProps(rnd: Phaser.Math.RandomDataGenerator, free: (x: number, y: number, r: number) => boolean) {
+    let pid = 0;
+    const hs = this.house!;
+    const img = (art: PropArt, x: number, y: number, oy = 0.85) => this.add.image(x, y, "prop_" + art).setDisplaySize(PROP_ART[art][0], PROP_ART[art][1]).setOrigin(0.5, oy).setDepth(y);
+    const ob = (p: Prop, r: number, extra: Partial<Ob> = {}) => { const o: Ob = { x: p.x, y: p.y, r, img: p.img, canopy: 0, size: r * 2, prop: p, ...extra }; p.ob = o; this.obs.push(o); return o; };
+    const box = (cx: number, cy: number, ex: number, ey: number, a: number, h: number): WallBox => {
+      const c = Math.cos(a), s = Math.sin(a);
+      const pts = [[-ex, -ey], [ex, -ey], [ex, ey], [-ex, ey]].map(([u, v]) => ({ x: cx + u * c - v * s, y: cy + u * s + v * c }));
+      return { cx, cy, ex, ey, c, s, h, pts };
+    };
+    const add = (kind: PropKind, x: number, y: number, hp: number, im: Phaser.GameObjects.Image) => { const p: Prop = { id: pid++, kind, x, y, hp, img: im, dead: false }; this.props.push(p); return p; };
+    const barrel = (x: number, y: number, blue = false) => { const p = add(blue ? "drum" : "barrel", x, y, blue ? 9 : 3, img(blue ? "barrel_blue" : "barrel", x, y, 0.86)); ob(p, 10, { upright: true }); };
+    const crate = (x: number, y: number) => { const p = add("crate", x, y, 4, img("crate", x, y, 0.88)); ob(p, 14, { upright: true }); };
+    const tires = (x: number, y: number) => { const p = add("tires", x, y, 99, img("tires", x, y, 0.6)); ob(p, 13, { low: true }); };
+    // брошенные машины (прямоугольник-препятствие, как стены дома)
+    for (let n = 0, tries = 0; n < 8 && tries < 400; tries++) {
+      const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200);
+      if (!free(x, y, 62)) continue;
+      const a = rnd.realInRange(0, TAU), art = rnd.pick(["car_red", "car_teal", "car_burnt", "car_burnt"] as PropArt[]);
+      const im = this.add.image(x, y, "prop_" + art).setDisplaySize(112, 54).setRotation(a).setDepth(y - 10);
+      const p = add("car", x, y, 999, im);
+      p.wall = box(x, y, 52, 22, a, 22);
+      this.walls.push(p.wall);
+      // рядом — бочки и покрышки
+      const c = Math.cos(a), s = Math.sin(a);
+      if (rnd.frac() < 0.7) barrel(x + c * 64 - s * 10, y + s * 64 + c * 10);
+      if (rnd.frac() < 0.4) barrel(x + c * 66 + s * 18, y + s * 66 - c * 18);
+      if (rnd.frac() < 0.5) tires(x - c * 70 + s * 6, y - s * 70 - c * 6);
+      n++;
+    }
+    // бочки кучками (красные взрываются, синие — просто железо)
+    for (let n = 0, tries = 0; n < 16 && tries < 600; tries++) {
+      const x = rnd.between(140, W - 140), y = rnd.between(140, H - 140);
+      if (!free(x, y, 40)) continue;
+      const k = rnd.between(1, 3);
+      for (let i = 0; i < k; i++) barrel(x + (i % 2) * 22 - 11 + rnd.between(-3, 3), y + Math.floor(i / 2) * 18 + rnd.between(-3, 3), rnd.frac() < 0.25);
+      n++;
+    }
+    // ящики
+    for (let n = 0, tries = 0; n < 14 && tries < 600; tries++) {
+      const x = rnd.between(140, W - 140), y = rnd.between(140, H - 140);
+      if (!free(x, y, 30)) continue;
+      crate(x, y);
+      if (rnd.frac() < 0.4) crate(x + 30, y + rnd.between(-6, 6));
+      n++;
+    }
+    // у дома: ящики, бочка, фонарь и забор
+    crate(hs.cx - 120, hs.by1 + 30); crate(hs.cx - 92, hs.by1 + 36); barrel(hs.cx - 106, hs.by1 + 62);
+    // костры (светят и ночью греют глаз)
+    const fire = (x: number, y: number) => {
+      const p = add("fire", x, y, 99, img("campfire", x, y, 0.6));
+      ob(p, 14, { low: true });
+      p.light = { dx: 0, dy: -4, r: 210, col: 0xff8a30, a: 0.75, flick: 0.25, night: false };
+      p.fire = this.flames(x, y - 6, 1);
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + 0.5; const lx = x + Math.cos(a) * 44, ly = y + Math.sin(a) * 30; if (free(lx, ly, 10)) { const lp = add("fence", lx, ly, 99, this.add.image(lx, ly, "prop_fence").setDisplaySize(40, 12).setRotation(a + Math.PI / 2).setDepth(-4)); void lp; } }
+    };
+    for (let n = 0, tries = 0; n < 4 && tries < 300; tries++) {
+      const x = rnd.between(300, W - 300), y = rnd.between(300, H - 300);
+      if (!free(x, y, 60)) continue;
+      fire(x, y); n++;
+    }
+    // фонарные столбы: у дома и вдоль старой дороги через карту
+    const lamp = (x: number, y: number, broken: boolean) => {
+      const p = add("lamp", x, y, 99, img("lamp", x, y, 0.95));
+      ob(p, 6, { upright: true });
+      p.light = { dx: 7, dy: 6, r: 200, col: 0xffd890, a: 0.85, flick: broken ? 1 : 0.03, night: true };
+    };
+    lamp(hs.bx0 - 26, hs.by1 + 10, false);
+    for (let i = 0, tries = 0; i < 7 && tries < 200; tries++) {
+      const x = 260 + (i * (W - 520)) / 6 + rnd.between(-30, 30), y = H / 2 + 330 + Math.sin(i * 1.3) * 60;
+      if (!free(x, y, 16)) { i++; continue; }
+      lamp(x, y, rnd.frac() < 0.3); i++;
+    }
+    // заборы (поломанные пролёты)
+    for (let n = 0, tries = 0; n < 6 && tries < 300; tries++) {
+      const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200), a = rnd.pick([0, Math.PI / 2, rnd.realInRange(-0.4, 0.4)]);
+      const k = rnd.between(2, 4), c = Math.cos(a), s = Math.sin(a);
+      let ok = true;
+      for (let i = 0; i < k; i++) if (!free(x + c * i * 80, y + s * i * 80, 44)) ok = false;
+      if (!ok) continue;
+      for (let i = 0; i < k; i++) {
+        if (i > 0 && rnd.frac() < 0.25) continue; // дыра в заборе
+        const fx = x + c * i * 80, fy = y + s * i * 80;
+        const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(84, 26).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
+        const p = add("fence", fx, fy, 99, im);
+        p.wall = box(fx, fy, 40, 3, a, 14);
+        this.walls.push(p.wall);
+      }
+      n++;
+    }
+    // предупреждающие таблички
+    for (let n = 0, tries = 0; n < 5 && tries < 200; tries++) {
+      const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200);
+      if (!free(x, y, 16)) continue;
+      const p = add("sign", x, y, 99, img("sign", x, y, 0.96)); ob(p, 5, { upright: true }); n++;
+    }
+  }
+  /** пламя: частицы вверх, ярко (ADD) */
+  flames(x: number, y: number, scale: number) {
+    return this.add.particles(x, y, "flame", {
+      speedY: { min: -60 * scale, max: -25 * scale }, speedX: { min: -12, max: 12 }, lifespan: { min: 350, max: 750 }, frequency: 45 / scale,
+      scale: { start: 0.65 * scale, end: 0.1 }, alpha: { start: 0.9, end: 0 }, tint: [0xffe080, 0xffa030, 0xff6020, 0xff4010],
+      x: { min: -6 * scale, max: 6 * scale }, blendMode: Phaser.BlendModes.ADD,
+    }).setDepth(y + 8);
+  }
+  /** ударная волна: светлое кольцо расходится по земле */
+  shock(x: number, y: number, power: number) {
+    const ring = this.add.circle(x, y, 16).setStrokeStyle(5, 0xfff0c0, 0.75).setDepth(-3.9);
+    this.tweens.add({ targets: ring, scale: 7.5 * power, alpha: 0, duration: 380, ease: "Cubic.easeOut", onComplete: () => ring.destroy() });
+    const dust = this.add.circle(x, y, 30, 0x6a5a3a, 0.35).setDepth(-3.95);
+    this.tweens.add({ targets: dust, scale: 3.5 * power, alpha: 0, duration: 900, ease: "Quad.easeOut", onComplete: () => dust.destroy() });
+  }
+  /** урон предмету (считает хозяин / одиночная игра) */
+  hitProp(p: Prop, dmg: number) {
+    if (p.dead || NET.role === "client") return;
+    if (p.kind !== "barrel" && p.kind !== "crate" && p.kind !== "drum") return;
+    p.hp -= dmg;
+    if (p.hp <= 0) this.breakProp(p, true);
+  }
+  /** бочка взрывается, ящик разлетается. fx=false — тихо (догоняем по снимку хозяина) */
+  breakProp(p: Prop, fx: boolean) {
+    if (p.dead) return;
+    if (p.kind === "drum") { p.hp = 999; return; } // синюю бочку не взорвать — просто вмятины
+    p.dead = true;
+    if (NET.role === "host") send({ t: "prop", id: p.id });
+    if (p.ob) { this.obs = this.obs.filter((o) => o !== p.ob); this.light.removeShadow(p.img); }
+    p.img.destroy();
+    this.buildGrid(); this.flowCell = -1;
+    if (!fx) return;
+    if (p.kind === "barrel") {
+      // взрыв сильнее гранаты, остаётся горящее пятно; соседние бочки рвутся цепочкой (в explode)
+      if (NET.role !== "client") this.explode(p.x, p.y - 4, 1.25);
+      const sc = this.add.ellipse(p.x, p.y, 30, 20, 0x0e0a06, 0.7).setDepth(-4.1);
+      this.tweens.add({ targets: sc, alpha: 0, delay: 20000, duration: 4000, onComplete: () => sc.destroy() });
+      for (let i = 0; i < 5; i++) this.gib("gib_chunk", Phaser.Utils.Array.GetRandom([0xc8281a, 0x8a1a10, 0x3a3a3a]), p.x, p.y, 10, rand(0, TAU), rand(120, 300), rand(200, 380), { scale: rand(0.8, 1.4), life: rand(6, 9) });
+      this.burns.push({ x: p.x, y: p.y, t: 6, fire: this.flames(p.x, p.y - 2, 0.8), tick: 0 });
+    } else {
+      sfx("crate", this.near(p.x, p.y));
+      for (let i = 0; i < 10; i++) this.gib("gib_arm", Phaser.Utils.Array.GetRandom([0xc8945a, 0xa8743a, 0x7a5228]), p.x, p.y, 10, rand(0, TAU), rand(60, 200), rand(120, 260), { scale: rand(0.5, 0.9), life: rand(5, 8) });
+      this.blood.setParticleTint(0xb88a4e); this.blood.explode(14, p.x, p.y - 12);
+      // иногда в ящике что-то есть
+      if (NET.role !== "client") { const r = Math.random(); if (r < 0.2) this.dropItem("grenade", p.x, p.y); else if (r < 0.38) this.dropItem("medkit", p.x, p.y); else if (r < 0.45) this.dropItem("armor", p.x, p.y); }
+    }
+  }
+  /** горящие пятна: жгут монстров и игроков рядом, гаснут */
+  updateBurns(dt: number) {
+    for (const b of this.burns) {
+      b.t -= dt;
+      if (b.t < 1.2) b.fire.setFrequency(45 / Math.max(0.15, b.t / 1.2) / 0.8);
+      if (b.t <= 0) { b.fire.stop(); this.time.delayedCall(900, () => b.fire.destroy()); continue; }
+      b.tick -= dt;
+      if (b.tick > 0 || NET.role === "client") continue;
+      b.tick = 0.4;
+      for (const e of this.enemies) if (!e.dead && Math.hypot(e.x - b.x, e.y - b.y) < 30 + KINDS[e.kind].r) {
+        e.hp -= 1; e.hitT = 0.07;
+        if (e.hp <= 0) this.kill(e, rand(0, TAU));
+      }
+      if (!this.dead && Math.hypot(this.px - b.x, this.py - b.y) < 34) this.hurtPlayer(4);
+      for (const m of this.mates.values()) if (!m.dead && Math.hypot(m.x - b.x, m.y - b.y) < 34) this.hurtMate(m, 4);
+    }
+    this.burns = this.burns.filter((b) => b.t > 0);
+  }
+  /** свет костров, фонарей, пожаров и взрывов на этот кадр */
+  propLights() {
+    const L = this.light, night = L.night, now = performance.now() / 1000, out: typeof L.extra = [];
+    const v = this.cameras.main.worldView;
+    for (const p of this.props) {
+      const l = p.light;
+      if (!l || p.dead) continue;
+      const x = p.x + l.dx, y = p.y + l.dy;
+      const seen = !(x < v.x - l.r || x > v.right + l.r || y < v.y - l.r || y > v.bottom + l.r);
+      // пламя вне экрана не считаем
+      if (p.fire && p.fire.active !== seen) { p.fire.active = seen; p.fire.setVisible(seen); }
+      if (!seen) continue;
+      // мерцание: костёр дышит, сломанный фонарь моргает
+      let f = 1 - l.flick * 0.5 * (Math.sin(now * 13 + p.id) * 0.5 + Math.sin(now * 7.3 + p.id * 3) * 0.5 + 0.5);
+      if (l.flick >= 1) f = Math.sin(now * 3 + p.id) > 0.2 || Math.sin(now * 23 + p.id) > 0.6 ? 1 : 0.08;
+      const k = l.night ? Math.max(0, (night - 0.25) / 0.75) : 0.25 + night * 0.75;
+      out.push({ x, y, r: l.r * (0.92 + f * 0.08), col: l.col, a: l.a * f * k });
+    }
+    for (const b of this.burns) out.push({ x: b.x, y: b.y - 4, r: 170, col: 0xff7a20, a: Math.min(1, b.t / 1.5) * (0.5 + night * 0.5) * (0.85 + Math.random() * 0.15) });
+    for (const b of this.booms) { const k = 1 - b.t / 0.55; if (k > 0) out.push({ x: b.x, y: b.y, r: 280, col: 0xffa040, a: k * k * (0.35 + night * 1.1) }); }
+    L.extra = out;
   }
 
   // ── поиск пути: сетка по миру, от героя волной расходятся расстояния (обход деревьев и камней) ──
@@ -1044,6 +1244,7 @@ class Game extends Phaser.Scene {
     // время суток из настроек (у гостя — как у хозяина)
     if (NET.role !== "client" && settings.daynight !== "cycle") L.t = Math.floor(L.t) + (settings.daynight === "day" ? 0.25 : 0.72);
     L.shadows = settings.quality !== "low";
+    this.propLights();
     L.update(dt, this.px, this.py, this.aimA, alive && this.muzzleT > 0 ? 1 : 0, { x: this.px + ca * 30, y: this.py + sa * 30 + gunZ }, alive ? occ : []);
     S.daytime = L.label();
     const sun = L.sun, night = L.night;
@@ -1390,12 +1591,21 @@ class Game extends Phaser.Scene {
     sfx("gore", this.near(e.x, e.y));
   }
 
-  explode(x: number, y: number) {
-    if (NET.role === "host") send({ t: "boom", x, y });
+  explode(x: number, y: number, power = 1) {
+    if (NET.role === "host") send({ t: "boom", x, y, p: power });
     sfx("boom", Math.max(0.6, this.near(x, y)));
-    this.cameras.main.shake(220, 0.004);
+    this.cameras.main.shake(220 * power, 0.004 * power);
     this.booms.push({ x, y, t: 0 });
-    const R = 125;
+    this.shock(x, y, power);
+    const R = 125 * power;
+    // соседние бочки рвутся цепочкой (с задержкой), ящики ломаются
+    if (NET.role !== "client") for (const p of this.props) {
+      if (p.dead || (p.kind !== "barrel" && p.kind !== "crate")) continue;
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d > R * 0.85 || d < 1) continue;
+      if (p.kind === "barrel") this.time.delayedCall(110 + d * 1.2, () => this.breakProp(p, true));
+      else this.hitProp(p, 6 * (1 - d / R) + 1);
+    }
     // урон считает хозяин (у гостя — только вид)
     if (NET.role !== "client") for (const e of this.enemies) {
       if (e.dead) continue;
@@ -1409,8 +1619,9 @@ class Game extends Phaser.Scene {
     }
     if (NET.role !== "client") {
       const pd = Math.hypot(this.px - x, this.py - y);
-      if (pd < 95) this.hurtPlayer(Math.round(5 + 30 * (1 - pd / 95)));
-      for (const m of this.mates.values()) { const md = Math.hypot(m.x - x, m.y - y); if (md < 95) this.hurtMate(m, Math.round(5 + 30 * (1 - md / 95))); }
+      const PR = 95 * power;
+      if (pd < PR) this.hurtPlayer(Math.round(5 + 30 * (1 - pd / PR)));
+      for (const m of this.mates.values()) { const md = Math.hypot(m.x - x, m.y - y); if (md < PR) this.hurtMate(m, Math.round(5 + 30 * (1 - md / PR))); }
     }
     // искры, земля, воронка
     this.blood.setParticleTint(0xffb040);
@@ -1491,6 +1702,7 @@ class Game extends Phaser.Scene {
     this.updateGibs(dt);
     this.updateNades(dt);
     this.updateSpits(dt);
+    this.updateBurns(dt);
     this.updateItems(dt);
     this.drawFx(dt);
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
@@ -1597,7 +1809,33 @@ class Game extends Phaser.Scene {
         this.blood.explode(4, b.x - b.dx * 3, b.y - b.dy * 3 + gunZ);
         break;
       }
-      for (const o of this.obs) if (!hit && b.d > 0 && Math.hypot(b.x - o.x, b.y - o.y) < o.r * 0.9) {
+      // стоячие предметы (бочки, ящики, столбы): попадание по видимой высоте и по всему пути пули за кадр
+      if (b.d > 0) for (const o of this.obs) {
+        if (!o.prop || !o.upright || hit) continue;
+        const rx = o.x - b.x, ry = o.y - b.y;
+        if (Math.abs(rx) > step + 30 || Math.abs(ry) > step + 40) continue;
+        for (let u = 0; u <= step; u += 5) {
+          const qx = b.x + b.dx * u - o.x, qy = b.y + b.dy * u - o.y;
+          if (Math.abs(qx) < o.r + 1 && qy > -o.r - 16 && qy < o.r * 0.7) { hit = true; break; }
+        }
+        if (!hit) continue;
+        const metal = o.prop.kind !== "crate" && o.prop.kind !== "sign";
+        sfx(metal ? "clang" : "thunk", this.near(o.x, o.y) * 0.9);
+        this.blood.setParticleTint(metal ? 0xffe080 : 0xb88a4e);
+        this.blood.explode(metal ? 6 : 5, o.x - b.dx * 8, o.y - 12);
+        if (!b.vis) this.hitProp(o.prop, b.dmg);
+      }
+      for (const o of this.obs) if (!hit && b.d > 0 && !o.low && !(o.prop && o.upright) && Math.hypot(b.x - o.x, b.y - o.y) < o.r * 0.9) {
+        if (o.prop) {
+          // бочка/ящик/столб: пуля застревает, предмет получает урон
+          hit = true;
+          const metal = o.prop.kind !== "crate" && o.prop.kind !== "sign";
+          sfx(metal ? "clang" : "thunk", this.near(b.x, b.y) * 0.9);
+          this.blood.setParticleTint(metal ? 0xffe080 : 0xb88a4e);
+          this.blood.explode(metal ? 6 : 5, b.x - b.dx * 4, b.y - b.dy * 4 - 10);
+          if (!b.vis) this.hitProp(o.prop, b.dmg);
+          break;
+        }
         if (!o.canopy && b.bounces < 2) {
           // камень: рикошет — отражаем от поверхности, с разбросом, пуля теряет скорость жизни
           const nx = (b.x - o.x) / (Math.hypot(b.x - o.x, b.y - o.y) || 1), ny = (b.y - o.y) / (Math.hypot(b.x - o.x, b.y - o.y) || 1);
@@ -2035,7 +2273,8 @@ class Game extends Phaser.Scene {
       case "chat": this.addChat(String(m.who), String(m.text).slice(0, 120)); break;
       case "kill": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) this.kill(e, m.dir); break; }
       case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm, !!m.legs); sfx("hit", this.near(e.x, e.y)); } break; }
-      case "boom": this.explode(m.x, m.y); break;
+      case "boom": this.explode(m.x, m.y, m.p || 1); break;
+      case "prop": { const p = this.props.find((q) => q.id === m.id); if (p) this.breakProp(p, true); break; }
       case "spit": { this.spawnSpit(m.x, m.y, m.z, m.vx, m.vy, m.vz, true); const e = this.enemies.find((q) => q.id === m.id); if (e?.hum) e.hum.recoil = 0.25; sfx("splat", this.near(m.x, m.y) * 0.8); break; }
       case "hurt": this.hurtPlayer(m.dmg, true); break;
       case "give":
@@ -2073,7 +2312,7 @@ class Game extends Phaser.Scene {
       const E = this.enemies.filter((e) => !e.dead).map((e) => [e.id, KIND_LIST.indexOf(e.kind), e.x | 0, e.y | 0, r2(e.a), r2(e.ph), e.hitT > 0 ? 1 : 0, e.hum ? (e.hum.armsOn[0] ? 1 : 0) | (e.hum.armsOn[1] ? 2 : 0) | (e.hum.crawl ? 4 : 0) : 3]);
       const I = this.items.map((it) => [it.id, ITEM_KINDS.indexOf(it.kind), it.x | 0, it.y | 0]);
       const N = this.nades.map((n) => [n.x | 0, n.y | 0, n.z | 0, r2(n.spin), n.t < 0.7 && Math.sin(n.t * 40) > 0 ? 1 : 0]);
-      send({ t: "snap", P, E, I, N, w: S.wave, k: S.kills, s: S.score, lt: Math.round(this.light.t * 1e4) / 1e4, o: S.over ? 1 : 0 });
+      send({ t: "snap", P, E, I, N, pd: this.props.filter((p) => p.dead).map((p) => p.id), w: S.wave, k: S.kills, s: S.score, lt: Math.round(this.light.t * 1e4) / 1e4, o: S.over ? 1 : 0 });
     } else if (NET.role === "client") {
       this.inT -= dt;
       if (this.inT > 0) return;
@@ -2096,6 +2335,7 @@ class Game extends Phaser.Scene {
     if (this.lastSnap) this.snapGap = Phaser.Math.Clamp(this.snapGap * 0.8 + ((now - this.lastSnap) / 1000) * 0.2, 0.02, 0.3);
     this.lastSnap = now;
     S.wave = m.w; S.kills = m.k; S.score = m.s;
+    if (Array.isArray(m.pd)) for (const id of m.pd) { const p = this.props.find((q) => q.id === id); if (p && !p.dead) this.breakProp(p, false); }
     if (Math.abs(this.light.t - m.lt) > 0.003) this.light.t = m.lt;
     if (m.o && !S.over) { S.over = true; sfx("over"); }
     // игроки
