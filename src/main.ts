@@ -2199,17 +2199,20 @@ class UI extends Phaser.Scene {
     if (!tt) { tt = this.add.text(0, 0, "", { fontFamily: "system-ui, Segoe UI, Roboto, sans-serif", fontStyle: "800", stroke: "#14110d", strokeThickness: 4 }).setDepth(1); this.tpool.push(tt); }
     return tt.setText(s).setFontSize(size).setColor(color).setOrigin(ox, 0.5).setPosition(x, y).setVisible(true);
   }
-  /** верх экрана: жизнь, броня, волна/убито/очки/время суток, патроны пульками, гранаты и аптечки */
+  /** верх экрана одной строкой: [сердце | жизнь, под ней броня] [волна] [убито] [очки] [патроны пульками] [гранаты] [аптечки] */
   drawTop(g: Phaser.GameObjects.Graphics, w: number, h: number) {
-    const g2 = this.g2, sc = w < 700 || h < 450 ? 0.82 : 1, x = 12;
-    let y = 12 + 15 * sc;
-    // жизнь: сердце (бьётся, когда мало) и полоска в рамке
+    const g2 = this.g2, sc = w < 700 || h < 450 ? 0.8 : 0.92, x = 10;
+    // всё в одну строку; если не влезает (узкий экран) — патроны и предметы переносятся во вторую
+    const right = w - (S.touch ? 70 : 120); // справа кнопки паузы/рюкзака
+    let y = 10 + 16 * sc;
+    const pillBg = (x0: number, pw: number, cy: number) => g.fillStyle(0x14110d, 0.6).fillRoundedRect(x0, cy - 14 * sc, pw, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(x0, cy - 14 * sc, pw, 28 * sc, 14 * sc);
+    // блок жизни: сердце слева, полоска жизни, под ней — всегда полоска брони (пустая или полная)
     const f = Phaser.Math.Clamp(S.hp / S.maxHp, 0, 1), low = f < 0.3;
     const beat = low ? 1 + Math.max(0, Math.sin(performance.now() / 110)) * 0.12 : 1;
     this.img("heart", x - (beat - 1) * 15 * sc, y, sc * beat);
-    const bx = x + 36 * sc, bw = HUD_ART.bar[0] * sc, bh = HUD_ART.bar[1] * sc;
-    this.img("bar", bx, y, sc).setDepth(0.4);
-    const ix = bx + 4 * sc, iy = y - bh / 2 + 4 * sc, iw = bw - 8 * sc, ih = bh - 8 * sc;
+    const bx = x + 34 * sc, bw = 190 * sc, bh = 18 * sc, hy = y - 5 * sc;
+    this.img("bar", bx, hy, 1).setDisplaySize(bw, bh).setDepth(0.4);
+    const ix = bx + 3.5 * sc, iy = hy - bh / 2 + 3.5 * sc, iw = bw - 7 * sc, ih = bh - 7 * sc;
     const [c1, c2] = f > 0.5 ? [0x8ae05a, 0x3a8a22] : f > 0.25 ? [0xffd050, 0xb07a10] : [0xff6a50, 0xa01810];
     if (f > 0) {
       g2.fillGradientStyle(c1, c1, c2, c2, 1).fillRect(ix, iy, iw * f, ih);
@@ -2217,49 +2220,40 @@ class UI extends Phaser.Scene {
     }
     g2.fillStyle(0x000000, 0.28);
     for (let i = 1; i < 10; i++) g2.fillRect(ix + (iw * i) / 10 - 0.5, iy, 1, ih);
-    this.txt(`${Math.ceil(S.hp)}`, bx + bw / 2, y + 0.5, 14 * sc, "#ffffff", 0.5).setStroke("#14110d", 3);
-    // броня — щит и тонкая синяя полоска
-    if (S.armor > 0) {
-      y += 24 * sc;
-      this.img("shield", x + 1 * sc, y, sc * 0.8);
-      const ah = 10 * sc, aw = bw * 0.8;
-      g2.fillStyle(0x14110d, 0.82).fillRoundedRect(bx, y - ah / 2, aw, ah, 4).lineStyle(1.5, 0x8ab0e8, 0.9).strokeRoundedRect(bx, y - ah / 2, aw, ah, 4);
-      g2.fillGradientStyle(0xb0d0ff, 0xb0d0ff, 0x4a6ab8, 0x4a6ab8, 1).fillRect(bx + 2, y - ah / 2 + 2, (aw - 4) * Math.min(1, S.armor / 100), ah - 4);
-    }
+    this.txt(`${Math.ceil(S.hp)}`, bx + bw / 2, hy + 0.5, 12 * sc, "#ffffff", 0.5).setStroke("#14110d", 3);
+    const ay = hy + bh / 2 + 5.5 * sc, ah = 8 * sc, a = Math.min(1, S.armor / 100);
+    g2.fillStyle(0x14110d, 0.85).fillRoundedRect(bx + 2 * sc, ay - ah / 2, bw - 4 * sc, ah, 3).lineStyle(1.2, a > 0 ? 0x8ab0e8 : 0x6a6050, 0.9).strokeRoundedRect(bx + 2 * sc, ay - ah / 2, bw - 4 * sc, ah, 3);
+    if (a > 0) g2.fillGradientStyle(0xb0d0ff, 0xb0d0ff, 0x4a6ab8, 0x4a6ab8, 1).fillRect(bx + 3.5 * sc, ay - ah / 2 + 1.5, (bw - 7 * sc) * a, ah - 3);
+    this.img("shield", bx - 13 * sc, ay, sc * 0.5, a > 0 ? 1 : 0.45);
     // плашки: значок + число
-    const pill = (cx: number, cy: number, icon: HudArt | null, s: string, color = "#f2ead8", isc = 0.85) => {
-      const ic = icon ? this.img(icon, cx + 6 * sc, cy, sc * isc) : null;
-      const tx = this.txt(s, cx + (ic ? ic.displayWidth + 11 * sc : 10 * sc), cy + 0.5, 15 * sc, color);
-      const pw = (ic ? ic.displayWidth + 11 * sc : 10 * sc) + tx.width + 9 * sc;
-      g.fillStyle(0x14110d, 0.6).fillRoundedRect(cx, cy - 14 * sc, pw, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(cx, cy - 14 * sc, pw, 28 * sc, 14 * sc);
-      return cx + pw + 6 * sc;
+    const pill = (cx: number, cy: number, icon: HudArt, s: string, color = "#f2ead8", isc = 0.8) => {
+      const ic = this.img(icon, cx + 5 * sc, cy, sc * isc);
+      const tx = this.txt(s, cx + ic.displayWidth + 9 * sc, cy + 0.5, 14 * sc, color);
+      const pw = ic.displayWidth + 9 * sc + tx.width + 8 * sc;
+      pillBg(cx, pw, cy);
+      return cx + pw + 5 * sc;
     };
-    y += 32 * sc;
-    let cx = x;
+    let cx = bx + bw + 8 * sc;
     cx = pill(cx, y, "wave", `${S.wave}`, "#d8f0a0");
     cx = pill(cx, y, "kills", `${S.kills}`);
     cx = pill(cx, y, "score", `${S.score}`, "#ffe2a0");
-    pill(cx, y, this.gm.light?.night > 0.5 ? "moon" : "sun", S.daytime, "#e8e0cc");
     // патроны: пульки текущего оружия, истраченные — тусклые; при перезарядке наполняются
-    y += 32 * sc;
     const W_ = WEAPONS[SLOTS[S.weapon]];
-    cx = x;
-    const name = this.txt(wname(W_.id), x + 10 * sc, y + 0.5, 13 * sc, "#ffe2a0");
-    let ex = x + 10 * sc + name.width + 8 * sc;
-    if (W_.id === "grenade") {
-      const n = Math.min(S.grenades, 12);
-      for (let i = 0; i < Math.max(1, n); i++) this.img("grenade", ex + i * 17 * sc, y, sc * 0.72, n ? 1 : 0.2);
-      ex += Math.max(1, n) * 17 * sc + 4 * sc;
-    } else {
-      const [art, step] = W_.id === "rifle" ? ["bullet_rifle", 6.6] as const : W_.id === "shotgun" ? ["shell", 12] as const : ["bullet_pistol", 9] as const;
+    const [art, step, n] = W_.id === "grenade" ? ["grenade", 17, Math.max(1, Math.min(S.grenades, 12))] as const
+      : W_.id === "rifle" ? ["bullet_rifle", 6.2, W_.mag] as const : W_.id === "shotgun" ? ["shell", 12, W_.mag] as const : ["bullet_pistol", 9, W_.mag] as const;
+    const ammoW = 10 * sc + n * step * sc + 6 * sc, itemsW = 2 * 62 * sc;
+    if (cx + ammoW + (W_.id === "grenade" ? itemsW / 2 : itemsW) > right) { cx = x; y += 34 * sc; }
+    let ex = cx + 9 * sc;
+    if (W_.id === "grenade") for (let i = 0; i < n; i++) this.img("grenade", ex + i * step * sc, y, sc * 0.72, S.grenades ? 1 : 0.2);
+    else {
       const full = S.reload > 0 ? Math.floor(W_.mag * (1 - S.reload / W_.reload)) : S.clip[W_.id];
-      for (let i = 0; i < W_.mag; i++) this.img(art, ex + i * step * sc, y, sc, i < full ? (S.reload > 0 ? 0.6 : 1) : 0.16);
-      ex += W_.mag * step * sc + 4 * sc;
+      for (let i = 0; i < n; i++) this.img(art, ex + i * step * sc, y, sc * 0.92, i < full ? (S.reload > 0 ? 0.6 : 1) : 0.16);
     }
-    g.fillStyle(0x14110d, 0.6).fillRoundedRect(x, y - 14 * sc, ex - x + 4 * sc, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(x, y - 14 * sc, ex - x + 4 * sc, 28 * sc, 14 * sc);
-    cx = ex + 10 * sc;
-    if (W_.id !== "grenade") cx = pill(cx, y, "grenade", `×${S.grenades}`, S.grenades ? "#f2ead8" : "#8a8270", 0.8);
-    pill(cx, y, "medkit", `×${S.medkits}`, S.medkits ? "#f2ead8" : "#8a8270", 0.8);
+    ex += n * step * sc + 4 * sc;
+    pillBg(cx, ex - cx, y);
+    cx = ex + 5 * sc;
+    if (W_.id !== "grenade") cx = pill(cx, y, "grenade", `${S.grenades}`, S.grenades ? "#f2ead8" : "#8a8270", 0.72);
+    pill(cx, y, "medkit", `${S.medkits}`, S.medkits ? "#f2ead8" : "#8a8270", 0.72);
   }
   create() {
     const font = "system-ui, Segoe UI, Roboto, sans-serif";
