@@ -1469,12 +1469,16 @@ class UI extends Phaser.Scene {
   update() {
     const w = this.scale.width, h = this.scale.height, g = this.g.clear();
     for (const b of this.btn) b.setVisible(false);
+    // на паузе и после смерти нужен обычный курсор (нажимать кнопки), в игре — только прицел
+    const want = S.paused || S.over ? "default" : "none";
+    const el = document.getElementById("game");
+    if (el && el.style.cursor !== want) { el.style.cursor = want; this.game.canvas.style.cursor = want; }
     // полоска здоровья
     g.fillStyle(0x14110d, 0.8).fillRoundedRect(14, 14, 204, 18, 5);
     const f = S.hp / S.maxHp;
     g.fillStyle(f > 0.5 ? 0x6cc04a : f > 0.25 ? 0xe0b030 : 0xd83a2a).fillRoundedRect(16, 16, 200 * f, 14, 4);
     this.info.setText(`Патроны: ${S.reload > 0 ? "перезарядка…" : `${S.ammo}/${S.mag}`}   Гранаты: ${S.grenades}\nВолна: ${S.wave}   Убито: ${S.kills}   Очки: ${S.score}\n${S.daytime}`);
-    this.help.setPosition(w - 14, h - 12).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду");
+    this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду");
     // кооператив: код и число игроков
     const n = NET.conns.size + 1;
     this.net.setPosition(w / 2, 14).setText(NET.role === "host" ? `Кооператив · код ${NET.code} · игроков: ${n}` : NET.role === "client" ? `Кооператив · ты в игре ${NET.code}` : NET.status);
