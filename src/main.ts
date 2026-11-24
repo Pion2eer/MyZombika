@@ -48,6 +48,8 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 export const wname = (id: WeaponId) => t(`w_${id}` as Key);
 /** ячейки 1–4 */
 export const SLOTS: WeaponId[] = ["rifle", "shotgun", "pistol", "grenade"];
+/** граната: ближний и дальний бросок (px) и сколько секунд держать до полной силы */
+const NADE_MIN = 60, NADE_MAX = 340, NADE_FULL = 0.9;
 const MAX_MED = 5, MAX_GREN = 9, MED_HEAL = 35, ARMOR_ABSORB = 0.6;
 const fullClips = () => ({ rifle: WEAPONS.rifle.mag, shotgun: WEAPONS.shotgun.mag, pistol: WEAPONS.pistol.mag, grenade: 0 }) as Record<WeaponId, number>;
 /** горячая точка на экране (кнопки HUD и снаряжения), x/y/w/h — в пикселях экрана */
@@ -498,7 +500,9 @@ class Game extends Phaser.Scene {
     kb.on("keydown-TAB", () => this.toggleInv());
     kb.addCapture("TAB");
     this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => { if (!S.paused && !S.over && dy) this.cycleWeapon(dy > 0 ? 1 : -1); });
-    kb.on("keydown-G", () => this.throwNade());
+    // граната: чем дольше держишь, тем дальше бросок (отпустил — полетела)
+    kb.on("keydown-G", (e: KeyboardEvent) => { if (!e.repeat) this.chargeNade("key"); });
+    kb.on("keyup-G", () => this.releaseNade("key"));
     kb.on("keydown-SPACE", () => S.over && this.restartGame());
     kb.on("keydown-H", () => this.hostGame());
     kb.on("keydown-J", () => this.joinGame());
@@ -535,9 +539,9 @@ class Game extends Phaser.Scene {
       // надпись с кодом вверху — копирует ссылку
       if (NET.role === "host" && p.y < 40 && Math.abs(p.x - this.scale.width / 2) < 220) { copyInvite("link"); return; }
       S.touch = p.wasTouch;
-      if (!p.wasTouch) { if (p.rightButtonDown()) this.throwNade(); return; }
+      if (!p.wasTouch) { if (p.rightButtonDown()) this.chargeNade("mouse"); return; }
       // кнопка гранаты над правым стиком
-      if (Math.hypot(p.x - (this.scale.width - 110), p.y - (this.scale.height - 235 - S.lift)) < 38) { this.throwNade(); return; }
+      if (Math.hypot(p.x - (this.scale.width - 110), p.y - (this.scale.height - 235 - S.lift)) < 38) { this.chargeNade("touch", p.id); return; }
       const st = { id: p.id, ox: p.x, oy: p.y, x: p.x, y: p.y };
       if (p.x < this.scale.width / 2) { if (!S.move) S.move = st; } else if (!S.aim) S.aim = st;
     });
@@ -546,6 +550,7 @@ class Game extends Phaser.Scene {
       for (const st of [S.move, S.aim]) if (st && st.id === p.id) { st.x = p.x; st.y = p.y; }
     });
     const up = (p: Phaser.Input.Pointer) => {
+      if (this.charge && (this.charge.src === "mouse" ? !p.wasTouch && !p.rightButtonDown() : this.charge.src === "touch" && this.charge.pid === p.id)) this.releaseNade(this.charge.src);
       if (S.move?.id === p.id) S.move = null;
       if (S.aim?.id === p.id) S.aim = null;
     };
@@ -1261,14 +1266,28 @@ class Game extends Phaser.Scene {
     this.items = this.items.filter((it) => it.life > 0);
   }
 
-  throwNade() {
+  /** замах гранатой: откуда (клавиша, мышь, кнопка на экране, «огонь» в ячейке 4) и когда начали */
+  charge: { src: "key" | "mouse" | "touch" | "fire"; t0: number; pid?: number } | null = null;
+  /** сила броска 0..1: полная — за NADE_FULL секунд удержания */
+  nadePower() { return this.charge ? Math.min(1, (performance.now() - this.charge.t0) / 1000 / NADE_FULL) : 0; }
+  nadeDist(p: number) { return NADE_MIN + (NADE_MAX - NADE_MIN) * p; }
+  chargeNade(src: "key" | "mouse" | "touch" | "fire", pid?: number) {
+    if (S.over || S.paused || this.dead || S.inv || S.chatOpen || this.charge) return;
+    if (S.grenades <= 0) { S.msg = t("no_nades"); S.msgT = 0.8; sfx("empty"); return; }
+    this.charge = { src, t0: performance.now(), pid };
+  }
+  releaseNade(src: "key" | "mouse" | "touch" | "fire") {
+    if (!this.charge || this.charge.src !== src) return;
+    const p = this.nadePower();
+    this.charge = null;
+    this.throwNade(this.nadeDist(p));
+  }
+  throwNade(dist = 230) {
     if (S.over || S.paused || this.dead) return;
     if (S.grenades <= 0) { S.msg = t("no_nades"); S.msgT = 0.8; sfx("empty"); return; }
     S.grenades--;
     this.player.recoil = 1;
-    let dist = 230;
-    if (!S.touch) { const w = this.cameras.main.getWorldPoint(this.mouse.x, this.mouse.y); dist = Math.hypot(w.x - this.px, w.y - this.py); }
-    dist = Phaser.Math.Clamp(dist, 40, 330);
+    dist = Phaser.Math.Clamp(dist, NADE_MIN, NADE_MAX);
     const T = 0.45 + dist / 900, z0 = 18, a = this.aimA;
     const n = { x: this.px + Math.cos(a) * 8, y: this.py + Math.sin(a) * 8, z: z0, vx: (Math.cos(a) * dist) / T, vy: (Math.sin(a) * dist) / T, vz: (0.5 * 600 * T * T - z0) / T };
     // гость бросает «у хозяина»: полёт и взрыв считает он
@@ -1531,7 +1550,9 @@ class Game extends Phaser.Scene {
     if (S.reload > 0) { S.reload -= dt; if (S.reload <= 0) { S.reload = 0; S.clip[W_.id] = W_.mag; } }
     if (W_.id === "grenade") {
       // ячейка 4: огонь — бросок гранаты
-      if (firing && this.fireT <= 0) { this.fireT = W_.rate; this.throwNade(); }
+      // держишь огонь — замах, отпустил — бросок
+      if (firing && this.fireT <= 0 && !this.charge) this.chargeNade("fire");
+      if (!firing && this.charge?.src === "fire") { this.releaseNade("fire"); this.fireT = W_.rate; }
     } else {
       if (firing && S.reload > 0 && this.emptyT <= 0) { this.emptyT = 0.35; sfx("empty", 0.7); }
       if (firing && this.fireT <= 0 && S.reload <= 0) {
@@ -1659,12 +1680,20 @@ class Game extends Phaser.Scene {
     const ca = Math.cos(this.aimA), sa = Math.sin(this.aimA);
     const sx = this.px + ca * 30, sy = this.py + sa * 30 + gunZ;
     let L = Math.max(40, (S.touch ? 260 : aimDist) - 30);
-    if (W_.id === "grenade") {
-      // куда упадёт граната (бросок не дальше 330)
-      const d = Phaser.Math.Clamp(S.touch ? 230 : aimDist, 40, 330);
-      L = Math.max(10, d - 30);
-      g.lineStyle(1.5, 0x9aff60, 0.6).strokeCircle(this.px + ca * d, this.py + sa * d, 18).lineStyle(1, 0x9aff60, 0.25).strokeCircle(this.px + ca * d, this.py + sa * d, 95);
-    }
+    if (this.charge && (S.over || S.paused || S.inv)) this.charge = null;
+    if (this.charge) {
+      // замах: дуга полёта и место падения, растут, пока держишь
+      const p = this.nadePower(), d = this.nadeDist(p), T = 0.45 + d / 900, peak = (600 * T * T) / 8;
+      const lx = this.px + ca * d, ly = this.py + sa * d, col = p >= 1 ? 0xffd040 : 0x9aff60;
+      for (let i = 1; i < 14; i++) {
+        const u = i / 14, z = 4 * peak * u * (1 - u) + 18 * (1 - u);
+        const dx = this.px + ca * d * u, dy = this.py + sa * d * u - z;
+        g.fillStyle(0x14110d, 0.45).fillCircle(dx, dy, 3.6).fillStyle(col, 0.95 - u * 0.3).fillCircle(dx, dy, 2.4);
+      }
+      g.lineStyle(4, 0x14110d, 0.35).strokeCircle(lx, ly, 16).lineStyle(2, col, 0.95).strokeCircle(lx, ly, 16).lineStyle(1.2, col, 0.35).strokeCircle(lx, ly, 95);
+      g.lineStyle(3, col, 0.9).beginPath().arc(this.px, this.py - 34, 9, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2).strokePath();
+      L = 0;
+    } else if (W_.id === "grenade") L = 0;
     if (settings.aim) for (let t = 0; t < L; t += 14) {
       const t2 = Math.min(L, t + 7);
       g.lineStyle(1.6, 0xff4030, 0.55 * (1 - t / (L + 60))).lineBetween(sx + ca * t, sy + sa * t, sx + ca * t2, sy + sa * t2);
@@ -2445,6 +2474,7 @@ class UI extends Phaser.Scene {
       const bx = w - 110, by = h - 235 - S.lift;
       g.fillStyle(0x14110d, 0.45).fillCircle(bx, by, 30).lineStyle(3, 0xffffff, S.grenades ? 0.5 : 0.2).strokeCircle(bx, by, 30);
       this.img("grenade", bx - 12, by, 1.1, S.grenades ? 1 : 0.35);
+      if (gm.charge) { const pw = gm.nadePower(); g.lineStyle(4, pw >= 1 ? 0xffd040 : 0x9aff60, 0.95).beginPath().arc(bx, by, 30, -Math.PI / 2, -Math.PI / 2 + pw * Math.PI * 2).strokePath(); }
       // кнопка аптечки — левее гранаты
       if (!S.inv) {
         const hx = w - 190, hy = h - 215 - S.lift, on = S.medkits > 0;
