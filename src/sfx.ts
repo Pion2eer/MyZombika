@@ -2,7 +2,7 @@
 export type Sfx =
   | "shot" | "casing" | "empty" | "reload" | "hit" | "splat" | "gore" | "thunk" | "ricochet"
   | "step" | "hurt" | "groan" | "growl" | "squeak" | "roar" | "wave" | "over"
-  | "boom" | "pin" | "pickup" | "heal" | "bounce";
+  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor";
 
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
@@ -10,7 +10,7 @@ let noiseBuf: AudioBuffer | null = null;
 let muted = false;
 const last: Partial<Record<Sfx, number>> = {};
 /** не чаще, чем раз в N секунд (иначе каша из одинаковых звуков) */
-const GAP: Partial<Record<Sfx, number>> = { hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
+const GAP: Partial<Record<Sfx, number>> = { hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
 
 export function toggleMute() { muted = !muted; if (out) out.gain.value = muted ? 0 : 0.9; return muted; }
 /** браузер разрешает звук только после первого клика/нажатия */
@@ -170,6 +170,29 @@ export function sfx(kind: Sfx, vol = 1) {
       tone(t, 0.5, 0.8 * v, "sine", 90, 28);
       noise(t + 0.02, 1.2, 0.45 * v, "lowpass", 1400, 90, 1, 0.03);
       noise(t + 0.25, 0.9, 0.12 * v, "bandpass", 2500, 900, 1.5, 0.1);
+      break;
+    case "shotgun": // дробовик: тяжёлый хлопок и длинный хвост
+      noise(t, 0.14, 0.75 * v, "lowpass", 4200, 700);
+      tone(t, 0.18, 0.6 * v, "sine", 120, 35);
+      noise(t + 0.03, 0.45, 0.15 * v, "lowpass", 1000, 200);
+      break;
+    case "pistol":
+      noise(t, 0.06, 0.4 * v, "lowpass", 6500, 1500);
+      tone(t, 0.07, 0.3 * v, "sine", 220, 80);
+      break;
+    case "pump": // передёрнуть цевьё
+      click(t, 0.3 * v, 1200);
+      noise(t + 0.04, 0.08, 0.08 * v, "bandpass", 700, 500, 2);
+      click(t + 0.16, 0.35 * v, 1600);
+      break;
+    case "swap": // смена оружия
+      click(t, 0.18 * v, 2000);
+      noise(t + 0.03, 0.06, 0.05 * v, "bandpass", 1200, 900, 2);
+      break;
+    case "armor": // надел бронежилет
+      noise(t, 0.12, 0.15 * v, "bandpass", 500, 300, 1.5);
+      click(t + 0.1, 0.25 * v, 900);
+      click(t + 0.22, 0.25 * v, 1100);
       break;
     case "pin": // выдернул кольцо
       click(t, 0.3 * v, 3200);

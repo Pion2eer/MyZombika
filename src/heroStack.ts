@@ -405,3 +405,24 @@ export function medkitVox(): Vox {
   });
   return m;
 }
+
+/** Бронежилет: тёмно-оливковый жилет с пластинами и ремнями (лежит на земле). */
+export function armorVox(): Vox {
+  const m = newVox(0, 6);
+  const CL = 0x4a5530, PL = 0x5f6b3c, ST = 0x2a2a22, BK = 0x8a8a70;
+  fill(m, (u, v, z) => {
+    const au = Math.abs(u), av = Math.abs(v);
+    if (z > 3) return -1;
+    // силуэт жилета: туловище, вырез под шею, проймы
+    const body = au < 6.5 && av < 7.5 && !(u > 3.5 && av < 2.5) && !(au < 3 && av > 6.2);
+    if (!body) return -1;
+    if (z === 3) {
+      if (av > 6.6 || au > 5.6) return ST; // кант
+      if (Math.abs(v) < 0.6 || Math.abs(u + 1) < 0.6) return ST; // ремни
+      if (au < 1.2 && av > 3 && av < 5) return BK; // пряжки
+      return PL; // пластины
+    }
+    return CL;
+  });
+  return m;
+}

@@ -1,12 +1,12 @@
 // MyZombika — прототип бродилки-стрелялки с видом сверху.
 // Герой и зомби — псевдо-3D из срезов (sprite stacking, см. heroStack.ts), графика окружения — из LLM Survival.
-// Управление: WASD/стрелки — ходьба, мышь — прицел, ЛКМ — стрельба, R — перезарядка.
+// Управление: WASD/стрелки — ходьба, мышь — прицел, ЛКМ — стрельба, R — перезарядка, 1–4/колесо — оружие, Q — аптечка, I/Tab — снаряжение.
 // Тачскрин: левая половина экрана — стик ходьбы, правая — стик прицела (тянешь — стреляет).
 import Phaser from "phaser";
 import { sfx, toggleMute, unlockAudio } from "./sfx";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
-import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, grenadeVox, medkitVox, heroBody, heroHead, renderStack, setPalette, type Palette } from "./heroStack";
+import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, setPalette, type Palette } from "./heroStack";
 
 const W = 3000, H = 3000; // размер мира, px
 const VOX = 1.0, K = 3, DZ = 0.8, FRAMES = 64; // воксель = 1 px мира; атлас 64 поворота
@@ -20,10 +20,37 @@ const TQ = new URLSearchParams(location.search).get("time");
 const START_T = TQ === "night" ? 0.7 : TQ === "day" ? 0.2 : TQ === "evening" ? 0.45 : TQ !== null && !isNaN(Number(TQ)) ? Number(TQ) : 0.3;
 const START_WAVE = Math.max(1, Number(new URLSearchParams(location.search).get("wave")) || 1);
 
+// ───────── оружие ─────────
+// Таблица оружия — данные, а не код: в будущем «сюжете» оружие и улучшения находятся по пути (S.owned, поля таблицы).
+export type WeaponId = "rifle" | "shotgun" | "pistol" | "grenade";
+export interface WeaponDef {
+  id: WeaponId; name: string; short: string;
+  /** магазин, выстрелов в секунду (пауза между), перезарядка, с */
+  mag: number; rate: number; reload: number;
+  /** дробин за выстрел, разброс (рад), дальность (время жизни пули, с), урон дробины, отброс */
+  pellets: number; spread: number; life: number; dmg: number; kb: number;
+  sound: "shot" | "shotgun" | "pistol"; shake: number;
+}
+export const WEAPONS: Record<WeaponId, WeaponDef> = {
+  rifle: { id: "rifle", name: "Автомат", short: "Автомат", mag: 30, rate: 0.1, reload: 1.3, pellets: 1, spread: 0.06, life: 0.6, dmg: 1, kb: 90, sound: "shot", shake: 0.0004 },
+  shotgun: { id: "shotgun", name: "Дробовик", short: "Дробовик", mag: 6, rate: 0.8, reload: 2.0, pellets: 8, spread: 0.34, life: 0.22, dmg: 1, kb: 55, sound: "shotgun", shake: 0.0022 },
+  pistol: { id: "pistol", name: "Пистолет", short: "Пистолет", mag: 12, rate: 0.25, reload: 0.9, pellets: 1, spread: 0.03, life: 0.5, dmg: 1.5, kb: 110, sound: "pistol", shake: 0.0005 },
+  grenade: { id: "grenade", name: "Гранаты", short: "Гранаты", mag: 0, rate: 0.8, reload: 0, pellets: 0, spread: 0, life: 0, dmg: 0, kb: 0, sound: "shot", shake: 0 },
+};
+/** ячейки 1–4 */
+export const SLOTS: WeaponId[] = ["rifle", "shotgun", "pistol", "grenade"];
+const MAX_MED = 5, MAX_GREN = 9, MED_HEAL = 35, ARMOR_ABSORB = 0.6;
+const fullClips = () => ({ rifle: WEAPONS.rifle.mag, shotgun: WEAPONS.shotgun.mag, pistol: WEAPONS.pistol.mag, grenade: 0 }) as Record<WeaponId, number>;
+/** горячая точка на экране (кнопки HUD и снаряжения), x/y/w/h — в пикселях экрана */
+interface Hit { x: number; y: number; w: number; h: number; fn: () => void }
+
 // ───────── общее состояние для HUD ─────────
 interface Stick { id: number; ox: number; oy: number; x: number; y: number }
 export const S = (window as any).S = {
-  hp: 100, maxHp: 100, grenades: 1, ammo: 30, mag: 30, reload: 0, wave: 0, kills: 0, score: 0, over: false,
+  hp: 100, maxHp: 100, grenades: 1, reload: 0, wave: 0, kills: 0, score: 0, over: false,
+  /** оружие: выбранная ячейка (0..3), патроны в магазинах, какое оружие есть (в «волнах» — всё) */
+  weapon: 0, clip: fullClips(), owned: [true, true, true, true],
+  armor: 0, medkits: 0, inv: false, hits: [] as Hit[],
   msg: "", msgT: 0, daytime: "", net: "", chatOpen: false, chat: [] as { who: string; text: string; t: number; me: boolean }[], myName: "Игрок 1", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
 };
 
@@ -54,6 +81,8 @@ const PAL_MATE: Palette = {
   HAIR: PAL_HERO.HAIR.map((c) => recolor(c, 0.35, 0.3, 0.3)), BEARD: PAL_HERO.BEARD.map((c) => recolor(c, 0.35, 0.3, 0.3)),
   FUR: PAL_HERO.FUR.map((c) => recolor(c, 0.5, 0.75, 1.6)), FUR_DARK: PAL_HERO.FUR_DARK.map((c) => recolor(c, 0.5, 0.75, 1.6)),
 };
+/** в бронежилете: безрукавка становится оливковым жилетом с тёмными ремнями */
+const withVest = (p: Palette): Palette => ({ ...p, FUR: [0x56613a, 0x4a5530, 0x3f482b], LACE: 0x22221c, BRASS: 0x8a8a70 });
 const frameOf = (a: number) => ((Math.round((a / TAU) * FRAMES) % FRAMES) + FRAMES) % FRAMES;
 
 /** Человечек из срезов: тень, ступни, руки, тело, голова (+ оружие у героя). */
@@ -76,7 +105,10 @@ class Humanoid {
   sArms: Phaser.GameObjects.Graphics;
   /** мягкое пятно под ногами */
   contact: Phaser.GameObjects.Image;
-  constructor(scene: Phaser.Scene, x: number, y: number, skin: string, public pal: Palette, public gun: boolean) {
+  /** что в руках (у людей) */
+  weapon: WeaponId = "rifle";
+  armored = false;
+  constructor(scene: Phaser.Scene, x: number, y: number, public skin: string, public pal: Palette, public gun: boolean) {
     const bk = `${skin}_body`, hk = `${skin}_head`;
     // тень под ногами — мягкая, того же вида, что и длинная (одна тень, а не две разные)
     const shadow = (this.contact = scene.add.image(0, 2, "lt_cast").setDisplaySize(22, 11).setAlpha(0.25));
@@ -123,7 +155,55 @@ class Humanoid {
       g.lineStyle(3.4, skin).lineBetween(s.x, s.y, h.x, h.y);
       g.fillStyle(0x2e2014).fillCircle(h.x, h.y, 2.9).fillStyle(skin).fillCircle(h.x, h.y, 2.1);
     };
-    if (this.gun) {
+    if (this.gun && this.weapon === "grenade") {
+      // граната: правая рука занесена с гранатой, левая вытянута вперёд; бросок — рука уходит вперёд
+      const g = Math.sin(a) < -0.25 ? this.back : this.front;
+      const rk = this.recoil;
+      arm(-1, 12, -3, 9.5);
+      arm(1, 4 + 14 * rk, 6 - 4 * rk, 14 - 4 * rk);
+      if (rk < 0.3) {
+        const n = P(4 + 14 * rk, 6.5, 15.2);
+        g.fillStyle(0x1e2410).fillCircle(n.x, n.y, 3.4).fillStyle(0x5e6e2c).fillCircle(n.x, n.y, 2.5).fillStyle(0x9a9a92).fillRect(n.x - 1, n.y - 4.5, 2, 2);
+        sg.fillCircle(n.x, n.y, 3);
+      }
+    } else if (this.gun && this.weapon === "pistol") {
+      // пистолет: обе руки вытянуты вперёд, кисти вместе; отдача — ствол задирается
+      const g = Math.sin(a) < -0.25 ? this.back : this.front;
+      const rk = this.recoil * this.recoil * (3 - 2 * this.recoil);
+      const Pg = (u: number, v: number, z: number) => P(u - 2.5 * rk, v, z + 2.2 * rk * ((u - 12) / 8));
+      const b0 = Pg(12, 0.6, 9.6), b1 = Pg(20, 0.6, 9.8);
+      arm(1, 13 - 2.5 * rk, 1.8, 9.2);
+      arm(-1, 13.5 - 2.5 * rk, -0.6, 9.2);
+      g.lineStyle(4.6, 0x111111).lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(2.4, 0x5a5e66).lineBetween(b0.x, b0.y, b1.x, b1.y);
+      const hg = Pg(13.5, 0.6, 8.4);
+      g.fillStyle(0x2a2420).fillCircle(hg.x, hg.y, 1.8); // рукоять
+      sg.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      if (muzzle) {
+        const f = Pg(23, 0.6, 9.8);
+        g.fillStyle(0xffd060, 0.9).fillCircle(f.x, f.y, 4).fillStyle(0xffffff, 0.95).fillCircle(f.x, f.y, 2);
+      }
+    } else if (this.gun && this.weapon === "shotgun") {
+      // дробовик: длинный толстый ствол, деревянный приклад и цевьё
+      const g = Math.sin(a) < -0.25 ? this.back : this.front;
+      const rk = this.recoil * this.recoil * (3 - 2 * this.recoil);
+      const Pg = (u: number, v: number, z: number) => P(u - 6 * rk, v, z + 2 * rk * (u / 28));
+      const s0 = Pg(0, 2, 8), s1 = Pg(9, 2, 8.6), b0 = Pg(8, 1.6, 9), b1 = Pg(29, 1, 9.2);
+      g.lineStyle(7, 0x1a120a).lineBetween(s0.x, s0.y, s1.x, s1.y);
+      g.lineStyle(5, 0x7a4a22).lineBetween(s0.x, s0.y, s1.x, s1.y); // приклад
+      g.lineStyle(6, 0x111111).lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(3.4, 0x3c4046).lineBetween(b0.x, b0.y, b1.x, b1.y); // ствол
+      const f0 = Pg(15, 1.3, 8.6), f1 = Pg(21, 1.2, 8.7);
+      g.lineStyle(6.4, 0x1a120a).lineBetween(f0.x, f0.y, f1.x, f1.y);
+      g.lineStyle(4.4, 0x8a5428).lineBetween(f0.x, f0.y, f1.x, f1.y); // цевьё
+      sg.lineBetween(s0.x, s0.y, s1.x, s1.y).lineBetween(b0.x, b0.y, b1.x, b1.y);
+      if (muzzle) {
+        const f = Pg(33, 1, 9.2);
+        g.fillStyle(0xffb040, 0.9).fillCircle(f.x, f.y, 7.5).fillStyle(0xffe080, 0.95).fillCircle(f.x, f.y, 4).fillStyle(0xffffff).fillCircle(f.x, f.y, 2);
+      }
+      arm(1, 8 - 6 * rk, 2.6, 8.4 + 0.3 * rk);
+      arm(-1, 18 - 6 * rk, 1.2, 8.8 + 1 * rk);
+    } else if (this.gun) {
       const g = Math.sin(a) < -0.25 ? this.back : this.front;
       // отдача: оружие уходит назад и чуть задирается, кисти — вместе с ним
       const rk = this.recoil * this.recoil * (3 - 2 * this.recoil);
@@ -150,6 +230,15 @@ class Humanoid {
   }
   flash(on: boolean) {
     for (const im of [this.body, this.head]) on ? im.setTintFill(0xffffff) : im.clearTint();
+  }
+  /** надеть/снять бронежилет (другая стопка тела) */
+  setArmor(on: boolean) {
+    if (on === this.armored) return;
+    const key = on ? `${this.skin}A_body` : `${this.skin}_body`;
+    if (!this.body.scene.textures.exists(key)) return;
+    this.armored = on;
+    const f = this.body.frame.name;
+    this.body.setTexture(key, f);
   }
 }
 
@@ -179,9 +268,10 @@ interface Enemy {
   /** проверка «застрял»: где был и сколько ждать до проверки */
   sx: number; sy: number; st: number; side: number; sideT: number;
 }
-/** шанс выпадения: [граната, аптечка] */
-const DROP: Record<Kind, [number, number]> = { zombie: [0.07, 0.06], runner: [0.09, 0.07], rat: [0.03, 0.05], hyena: [0.1, 0.08], panther: [0.15, 0.1], bear: [0.8, 0.8] };
-type ItemKind = "grenade" | "medkit";
+/** шанс выпадения: [граната, аптечка, бронежилет] */
+const DROP: Record<Kind, [number, number, number]> = { zombie: [0.07, 0.06, 0.025], runner: [0.09, 0.07, 0.035], rat: [0.03, 0.05, 0], hyena: [0.1, 0.08, 0.05], panther: [0.15, 0.1, 0.1], bear: [0.8, 0.8, 0.6] };
+type ItemKind = "grenade" | "medkit" | "armor";
+const ITEM_KINDS: ItemKind[] = ["grenade", "medkit", "armor"];
 interface Item { id: number; kind: ItemKind; x: number; y: number; z: number; vz: number; t: number; life: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 interface Nade { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number; spin: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 /** высота для длины тени, px */
@@ -196,9 +286,13 @@ const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "gr
 interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number }
 /** где у дерева на картинке основание ствола (доля высоты): картинка ставится основанием в точку ствола */
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
-interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; /** только для вида (у гостя): не ранит */ vis?: boolean }
+interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; dmg: number; kb: number; /** длина трассера */ tr: number; /** только для вида (у гостя): не ранит */ vis?: boolean }
+/** пули одного выстрела (дробь — веером) */
+function shotBullets(w: WeaponDef, x: number, y: number, as: number[], vis: boolean): Bullet[] {
+  return as.map((a) => ({ x, y, dx: Math.cos(a), dy: Math.sin(a), life: w.life * (w.pellets > 1 ? rand(0.85, 1.15) : 1), d: 0, bounces: 0, dmg: w.dmg, kb: w.kb, tr: w.pellets > 1 ? 9 : 16, vis }));
+}
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
-interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number }
+interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number; w: number; armor: number; med: number }
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
@@ -269,7 +363,7 @@ class Game extends Phaser.Scene {
   }
 
   create() {
-    Object.assign(S, { paused: false, hp: 100, grenades: 1, ammo: 30, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
+    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
     this.lastSnap = 0; this.waitHost = false;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.booms = []; this.flowCell = -1;
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
@@ -281,6 +375,9 @@ class Game extends Phaser.Scene {
     makeStack(this, "zB_head", PAL_ZOMBIE_B, "head");
     makeStack(this, "mate_body", PAL_MATE, "body");
     makeStack(this, "mate_head", PAL_MATE, "head");
+    makeStack(this, "heroA_body", withVest(PAL_HERO), "body");
+    makeStack(this, "mateA_body", withVest(PAL_MATE), "body");
+    makeItem(this, "it_armor", armorVox(), 18, 0.6);
     makeItem(this, "it_grenade", grenadeVox(), 16, 0.75);
     makeItem(this, "it_medkit", medkitVox(), 20, 0.55);
     if (!this.textures.exists("dot")) {
@@ -329,6 +426,12 @@ class Game extends Phaser.Scene {
     const kb = this.input.keyboard!;
     this.keys = kb.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,R,SPACE") as Record<string, Phaser.Input.Keyboard.Key>;
     kb.on("keydown-R", () => this.startReload());
+    (["ONE", "TWO", "THREE", "FOUR"] as const).forEach((k, i) => { kb.on(`keydown-${k}`, () => this.selectWeapon(i)); kb.on(`keydown-NUMPAD_${k}`, () => this.selectWeapon(i)); });
+    kb.on("keydown-Q", () => this.useMedkit());
+    kb.on("keydown-I", () => this.toggleInv());
+    kb.on("keydown-TAB", () => this.toggleInv());
+    kb.addCapture("TAB");
+    this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => { if (!S.paused && !S.over && dy) this.cycleWeapon(dy > 0 ? 1 : -1); });
     kb.on("keydown-G", () => this.throwNade());
     kb.on("keydown-SPACE", () => S.over && this.restartGame());
     kb.on("keydown-H", () => this.hostGame());
@@ -355,6 +458,8 @@ class Game extends Phaser.Scene {
         }
         this.togglePause(); return;
       }
+      // кнопки HUD и снаряжения (рисует сцена UI)
+      for (const h of S.hits) if (p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) { S.touch = p.wasTouch; h.fn(); return; }
       // кнопка паузы в правом верхнем углу (для тачскрина)
       if (NET.role === "solo" && p.x > this.scale.width - 64 && p.y < 64) { this.togglePause(); return; }
       // в кооперативе там же — кнопка чата
@@ -546,10 +651,45 @@ class Game extends Phaser.Scene {
     return { x: Phaser.Math.Clamp(x, 40, W - 40), y: Phaser.Math.Clamp(y, 40, H - 40) };
   }
 
+  /** текущее оружие */
+  get cur() { return WEAPONS[SLOTS[S.weapon]]; }
   startReload() {
-    if (S.reload > 0 || S.ammo === S.mag || S.over) return;
-    S.reload = 1.3;
+    const w = this.cur;
+    if (S.reload > 0 || !w.mag || S.clip[w.id] === w.mag || S.over || this.dead) return;
+    S.reload = w.reload;
     sfx("reload");
+  }
+  selectWeapon(i: number) {
+    if (S.over || S.chatOpen || this.dead || i === S.weapon || !S.owned[i]) return;
+    S.weapon = i;
+    S.reload = 0; // перезарядка прерывается
+    this.fireT = Math.max(this.fireT, 0.22);
+    this.player.weapon = SLOTS[i];
+    this.player.recoil = 0;
+    sfx("swap");
+    const w = this.cur;
+    S.msg = w.id === "grenade" ? `Гранаты: ${S.grenades}` : w.name; S.msgT = 0.8;
+    if (w.mag && S.clip[w.id] === 0) this.startReload();
+  }
+  cycleWeapon(d: number) {
+    for (let k = 1; k <= SLOTS.length; k++) { const i = (S.weapon + d * k + SLOTS.length * 4) % SLOTS.length; if (S.owned[i]) { this.selectWeapon(i); return; } }
+  }
+  useMedkit() {
+    if (S.over || this.dead || S.chatOpen) return;
+    if (S.medkits <= 0) { S.msg = "Нет аптечек"; S.msgT = 0.8; sfx("empty"); return; }
+    if (S.hp >= S.maxHp) { S.msg = "Здоровье и так полное"; S.msgT = 0.8; return; }
+    S.medkits--;
+    // у гостя здоровье считает хозяин — просим его
+    if (NET.role === "client") send({ t: "heal" });
+    else S.hp = Math.min(S.maxHp, S.hp + MED_HEAL);
+    sfx("heal"); S.msg = `+${MED_HEAL} здоровья`; S.msgT = 0.9;
+  }
+  toggleInv() {
+    if (S.over || S.chatOpen || S.paused) return;
+    S.inv = !S.inv;
+    sfx("swap", 0.6);
+    // в одиночной игре мир на время снаряжения стоит
+    if (NET.role === "solo") { S.inv ? this.tweens.pauseAll() : this.tweens.resumeAll(); S.inv ? this.blood.pause() : this.blood.resume(); }
   }
 
   nextWave() {
@@ -603,6 +743,7 @@ class Game extends Phaser.Scene {
   }
 
   togglePause() {
+    if (S.inv) { this.toggleInv(); return; }
     if (S.over || S.chatOpen) return;
     S.paused = !S.paused;
     if (NET.role !== "solo") return; // в кооперативе мир не останавливается
@@ -775,7 +916,7 @@ class Game extends Phaser.Scene {
   /** fxOnly — у гостя: здоровье считает хозяин, здесь только тряска и звук */
   hurtPlayer(dmg: number, fxOnly = false) {
     if (S.over || this.dead) return;
-    if (!fxOnly) S.hp -= dmg;
+    if (!fxOnly) { const ab = Math.min(S.armor, Math.round(dmg * ARMOR_ABSORB)); S.armor -= ab; S.hp -= dmg - ab; }
     this.invul = 0.3; this.hurtT = 0.12;
     this.cameras.main.shake(100, 0.0025);
     this.cameras.main.flash(90, 140, 0, 0);
@@ -816,7 +957,8 @@ class Game extends Phaser.Scene {
 
   hurtMate(m: Mate, dmg: number) {
     if (m.dead) return;
-    m.hp -= dmg;
+    const ab = Math.min(m.armor, Math.round(dmg * ARMOR_ABSORB));
+    m.armor -= ab; m.hp -= dmg - ab;
     send({ t: "hurt", dmg }, m.id);
     if (m.hp <= 0) { m.hp = 0; m.dead = true; m.hum.body.setTint(0x777777); m.hum.head.setTint(0x777777); m.hum.back.clear(); m.hum.front.clear(); this.checkAllDead(); }
   }
@@ -832,7 +974,7 @@ class Game extends Phaser.Scene {
   dropItem(kind: ItemKind, x: number, y: number, id = this.iid++) {
     const key = `it_${kind}`;
     const img = this.add.image(x, y, key, 0).setOrigin(origins[key].x, origins[key].y).setScale(0.6);
-    const sh = this.add.image(x, y + 1, "lt_cast").setDisplaySize(kind === "medkit" ? 22 : 13, kind === "medkit" ? 11 : 8).setAlpha(0.35).setDepth(-3.5);
+    const sh = this.add.image(x, y + 1, "lt_cast").setDisplaySize(kind === "grenade" ? 13 : 22, kind === "grenade" ? 8 : 11).setAlpha(0.35).setDepth(-3.5);
     this.items.push({ id, kind, x, y, z: 0, vz: 200, t: Math.random() * 5, life: 30, img, sh });
   }
 
@@ -850,14 +992,18 @@ class Game extends Phaser.Scene {
       // подбирают: свой герой; у хозяина ещё и гости (им отправляется подарок)
       if (NET.role !== "client" && it.vz === 0 && it.life > 0) for (const m of this.mates.values()) {
         if (m.dead || Math.hypot(it.x - m.x, it.y - m.y) > 24) continue;
-        if (it.kind === "medkit" && m.hp < S.maxHp) { m.hp = Math.min(S.maxHp, m.hp + 35); send({ t: "give", k: "medkit" }, m.id); it.life = 0; break; }
-        if (it.kind === "grenade" && m.gren < 9) { m.gren++; send({ t: "give", k: "grenade" }, m.id); it.life = 0; break; }
+        if (it.kind === "medkit" && m.med < MAX_MED) { m.med++; send({ t: "give", k: "medkit" }, m.id); it.life = 0; break; }
+        if (it.kind === "grenade" && m.gren < MAX_GREN) { m.gren++; send({ t: "give", k: "grenade" }, m.id); it.life = 0; break; }
+        if (it.kind === "armor" && m.armor < 100) { m.armor = Math.min(100, m.armor + 50); send({ t: "give", k: "armor" }, m.id); it.life = 0; break; }
       }
       if (NET.role !== "client" && !S.over && !this.dead && it.life > 0 && Math.hypot(it.x - this.px, it.y - this.py) < 24 && it.vz === 0) {
-        if (it.kind === "medkit" && S.hp < S.maxHp) {
-          S.hp = Math.min(S.maxHp, S.hp + 35);
-          sfx("heal"); S.msg = "+35 здоровья"; S.msgT = 0.9; it.life = 0;
-        } else if (it.kind === "grenade" && S.grenades < 9) {
+        if (it.kind === "medkit" && S.medkits < MAX_MED) {
+          S.medkits++;
+          sfx("pickup"); S.msg = "+1 аптечка (Q)"; S.msgT = 0.9; it.life = 0;
+        } else if (it.kind === "armor" && S.armor < 100) {
+          S.armor = Math.min(100, S.armor + 50);
+          sfx("armor"); S.msg = "Бронежилет"; S.msgT = 0.9; it.life = 0;
+        } else if (it.kind === "grenade" && S.grenades < MAX_GREN) {
           S.grenades++;
           sfx("pickup"); S.msg = "+1 граната"; S.msgT = 0.9; it.life = 0;
         }
@@ -871,6 +1017,7 @@ class Game extends Phaser.Scene {
     if (S.over || S.paused || this.dead) return;
     if (S.grenades <= 0) { S.msg = "Нет гранат"; S.msgT = 0.8; sfx("empty"); return; }
     S.grenades--;
+    this.player.recoil = 1;
     let dist = 230;
     if (!S.touch) { const w = this.cameras.main.getWorldPoint(this.mouse.x, this.mouse.y); dist = Math.hypot(w.x - this.px, w.y - this.py); }
     dist = Phaser.Math.Clamp(dist, 40, 330);
@@ -963,7 +1110,7 @@ class Game extends Phaser.Scene {
     const night = this.light.night;
     if (night > 0.15) for (const it of this.items) {
       const p = 0.75 + Math.sin(it.t * 4) * 0.25;
-      for (let i = 0; i < 4; i++) g.fillStyle(it.kind === "medkit" ? 0xff5050 : 0x9aff60, 0.045 * night * p).fillCircle(it.x, it.y - 4, 20 * (1 - i / 5));
+      for (let i = 0; i < 4; i++) g.fillStyle(it.kind === "medkit" ? 0xff5050 : it.kind === "armor" ? 0x80b0ff : 0x9aff60, 0.045 * night * p).fillCircle(it.x, it.y - 4, 20 * (1 - i / 5));
     }
   }
 
@@ -993,15 +1140,16 @@ class Game extends Phaser.Scene {
     e.c.setDepth(-3);
     if (e.hum) { e.hum.back.clear(); e.hum.front.clear(); e.hum.flash(false); e.hum.body.setTint(0x6a6a6a); }
     if (e.img) e.img.setTint(0x555555);
-    const [pg, pm] = NET.role === "client" ? [0, 0] : DROP[e.kind];
+    const [pg, pm, pa] = NET.role === "client" ? [0, 0, 0] : DROP[e.kind];
     if (Math.random() < pg) this.dropItem("grenade", e.x - 5, e.y);
     if (Math.random() < pm) this.dropItem("medkit", e.x + 6, e.y + 4);
+    if (Math.random() < pa) this.dropItem("armor", e.x, e.y - 7);
     this.tweens.add({ targets: e.c, alpha: 0, scale: 0.85, delay: 6000, duration: 2000, onComplete: () => e.c.destroy() });
     this.tweens.add({ targets: pool, alpha: 0, delay: 8000, duration: 3000, onComplete: () => pool.destroy() });
   }
 
   update(_t: number, dtMs: number) {
-    if (S.paused && NET.role === "solo") return;
+    if ((S.paused || S.inv) && NET.role === "solo") return;
     const dt = Math.min(0.05, dtMs / 1000);
     const cam = this.cameras.main;
     if (S.msgT > 0) S.msgT -= dt;
@@ -1054,32 +1202,43 @@ class Game extends Phaser.Scene {
       firing = this.input.activePointer.leftButtonDown() && !this.input.activePointer.wasTouch;
     }
 
-    if (this.dead || S.paused || S.chatOpen) firing = false;
+    if (this.dead || S.paused || S.chatOpen || S.inv) firing = false;
     // ── стрельба ──
     this.player.recoil = Math.max(0, this.player.recoil - dt * 11);
     this.fireT -= dt; this.emptyT -= dt; this.muzzleT -= dt; this.invul -= dt; this.hurtT -= dt;
-    if (S.reload > 0) { S.reload -= dt; if (S.reload <= 0) { S.reload = 0; S.ammo = S.mag; } }
-    if (firing && S.reload > 0 && this.emptyT <= 0) { this.emptyT = 0.35; sfx("empty", 0.7); }
-    if (firing && this.fireT <= 0 && S.reload <= 0) {
-      if (S.ammo <= 0) this.startReload();
-      else {
-        S.ammo--;
-        this.fireT = 0.1;
-        this.muzzleT = 0.05;
-        this.player.recoil = 1;
-        const a = this.aimA + (Math.random() - 0.5) * 0.06;
-        const ca = Math.cos(this.aimA), sa = Math.sin(this.aimA);
-        // пуля летит от героя (чтобы попадать и в упор), видна от дула; высота добавляется при отрисовке
-        const bx = this.px + ca * 6, by = this.py + sa * 6;
-        this.bullets.push({ x: bx, y: by, dx: Math.cos(a), dy: Math.sin(a), life: 0.6, d: 0, bounces: 0, vis: NET.role === "client" });
-        // гость: пуля у него только для вида, попадания считает хозяин
-        if (NET.role === "client") send({ t: "shot", x: bx, y: by, a });
-        else if (NET.role === "host") send({ t: "fx", k: "shot", who: "host", x: bx, y: by, a });
-        cam.shake(30, 0.0004);
-        sfx("shot");
-        // гильза вылетает вправо от ствола
-        this.gib("gib_casing", 0xffffff, this.px + ca * 12 - sa * 3, this.py + sa * 12 + ca * 3, 9, this.aimA + Math.PI / 2 + rand(-0.4, 0.4), rand(70, 120), rand(90, 160), { casing: true, life: rand(4, 6) });
-        if (S.ammo === 0) this.startReload();
+    const W_ = this.cur;
+    this.player.weapon = W_.id;
+    if (S.reload > 0) { S.reload -= dt; if (S.reload <= 0) { S.reload = 0; S.clip[W_.id] = W_.mag; } }
+    if (W_.id === "grenade") {
+      // ячейка 4: огонь — бросок гранаты
+      if (firing && this.fireT <= 0) { this.fireT = W_.rate; this.throwNade(); }
+    } else {
+      if (firing && S.reload > 0 && this.emptyT <= 0) { this.emptyT = 0.35; sfx("empty", 0.7); }
+      if (firing && this.fireT <= 0 && S.reload <= 0) {
+        if (S.clip[W_.id] <= 0) this.startReload();
+        else {
+          S.clip[W_.id]--;
+          this.fireT = W_.rate;
+          this.muzzleT = W_.pellets > 1 ? 0.07 : 0.05;
+          this.player.recoil = 1;
+          const ca = Math.cos(this.aimA), sa = Math.sin(this.aimA);
+          // дробь — веером, одиночная пуля — с небольшим разбросом
+          const as: number[] = [];
+          for (let i = 0; i < W_.pellets; i++) as.push(Math.round((this.aimA + (W_.pellets > 1 ? ((i + Math.random()) / W_.pellets - 0.5) : Math.random() - 0.5) * W_.spread) * 1000) / 1000);
+          // пуля летит от героя (чтобы попадать и в упор), видна от дула; высота добавляется при отрисовке
+          const bx = Math.round(this.px + ca * 6), by = Math.round(this.py + sa * 6);
+          this.bullets.push(...shotBullets(W_, bx, by, as, NET.role === "client"));
+          // гость: пуля у него только для вида, попадания считает хозяин
+          if (NET.role === "client") send({ t: "shot", x: bx, y: by, as, w: W_.id });
+          else if (NET.role === "host") send({ t: "fx", k: "shot", who: "host", x: bx, y: by, as, w: W_.id });
+          cam.shake(W_.pellets > 1 ? 90 : 30, W_.shake);
+          sfx(W_.sound);
+          // гильза вылетает вправо от ствола (у дробовика — когда передёрнул цевьё)
+          const casing = () => this.gib("gib_casing", W_.pellets > 1 ? 0xff6050 : 0xffffff, this.px + ca * 12 - sa * 3, this.py + sa * 12 + ca * 3, 9, this.aimA + Math.PI / 2 + rand(-0.4, 0.4), rand(70, 120), rand(90, 160), { casing: true, life: rand(4, 6), scale: W_.pellets > 1 ? 1.4 : 1 });
+          if (W_.pellets > 1) this.time.delayedCall(330, () => { if (!this.dead) { sfx("pump", 0.9); casing(); } });
+          else casing();
+          if (S.clip[W_.id] === 0) this.time.delayedCall(W_.pellets > 1 ? 500 : 0, () => SLOTS[S.weapon] === W_.id && this.startReload());
+        }
       }
     }
 
@@ -1115,9 +1274,9 @@ class Game extends Phaser.Scene {
         if (Math.hypot(rx - b.dx * t, ry - b.dy * t) < KINDS[e.kind].r + 3) {
           hit = true;
           if (b.vis) break;
-          e.hp--;
+          e.hp -= b.dmg;
           e.hitT = 0.07;
-          const kb = 90 / KINDS[e.kind].mass;
+          const kb = b.kb / KINDS[e.kind].mass;
           e.kx += b.dx * kb; e.ky += b.dy * kb;
           this.blood.setParticleTint(KINDS[e.kind].blood);
           this.blood.explode(5, e.x - b.dx * 6, e.y - b.dy * 6 - 8);
@@ -1130,7 +1289,7 @@ class Game extends Phaser.Scene {
       }
       if (hit) { b.life = 0; continue; }
       b.x += b.dx * step; b.y += b.dy * step; b.life -= dt; b.d += step;
-      if (b.d > 36) this.bg.lineStyle(2.2, 0xffe080, 0.95).lineBetween(b.x - b.dx * 16, b.y - b.dy * 16 + gunZ, b.x, b.y + gunZ);
+      if (b.d > 36) this.bg.lineStyle(b.tr < 16 ? 1.8 : 2.2, 0xffe080, 0.95).lineBetween(b.x - b.dx * b.tr, b.y - b.dy * b.tr + gunZ, b.x, b.y + gunZ);
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
 
@@ -1150,6 +1309,7 @@ class Game extends Phaser.Scene {
 
     // ── герой ──
     this.player.c.setPosition(this.px, this.py).setDepth(this.py);
+    this.player.setArmor(S.armor > 0);
     if (!this.dead) this.player.pose(this.aimA, this.moveA, this.ph, this.moving, this.muzzleT > 0);
     if (!S.over && !this.dead) this.player.flash(this.hurtT > 0);
     this.updateMates(dt);
@@ -1160,7 +1320,13 @@ class Game extends Phaser.Scene {
     if (this.dead) return;
     const ca = Math.cos(this.aimA), sa = Math.sin(this.aimA);
     const sx = this.px + ca * 30, sy = this.py + sa * 30 + gunZ;
-    const L = Math.max(40, (S.touch ? 260 : aimDist) - 30);
+    let L = Math.max(40, (S.touch ? 260 : aimDist) - 30);
+    if (W_.id === "grenade") {
+      // куда упадёт граната (бросок не дальше 330)
+      const d = Phaser.Math.Clamp(S.touch ? 230 : aimDist, 40, 330);
+      L = Math.max(10, d - 30);
+      g.lineStyle(1.5, 0x9aff60, 0.6).strokeCircle(this.px + ca * d, this.py + sa * d, 18).lineStyle(1, 0x9aff60, 0.25).strokeCircle(this.px + ca * d, this.py + sa * d, 95);
+    }
     for (let t = 0; t < L; t += 14) {
       const t2 = Math.min(L, t + 7);
       g.lineStyle(1.6, 0xff4030, 0.55 * (1 - t / (L + 60))).lineBetween(sx + ca * t, sy + sa * t, sx + ca * t2, sy + sa * t2);
@@ -1309,7 +1475,7 @@ class Game extends Phaser.Scene {
       for (const n of this.nades) { n.img.destroy(); n.sh.destroy(); }
       this.enemies = []; this.items = []; this.nades = []; this.spawnQ = [];
       if (this.dead) this.revive();
-      Object.assign(S, { hp: 100, grenades: 1, wave: 0, kills: 0, score: 0, over: false });
+      Object.assign(S, { hp: 100, armor: 0, medkits: 0, grenades: 1, wave: 0, kills: 0, score: 0, over: false });
       S.msg = "Ты в игре у друга"; S.msgT = 2.5;
       if (S.paused) this.togglePause();
     }).catch(() => {
@@ -1377,7 +1543,7 @@ class Game extends Phaser.Scene {
     if (!m) {
       const name = NET.role === "host" ? this.freeName() : "Игрок";
       const label = this.add.text(x, y, name, { fontFamily: "system-ui, Segoe UI, Roboto, sans-serif", fontSize: "11px", fontStyle: "700", color: "#bfe0ff", stroke: "#14110d", strokeThickness: 3 }).setOrigin(0.5, 1).setDepth(1e6 + 2);
-      m = { id, name, label, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: performance.now() };
+      m = { id, name, label, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: performance.now(), w: 0, armor: 0, med: 0 };
       this.mates.set(id, m);
     }
     return m;
@@ -1441,14 +1607,19 @@ class Game extends Phaser.Scene {
       if (m.t === "in") {
         const mt = this.mate(from, m.x, m.y);
         this.mateTarget(mt, m.x, m.y);
-        Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, seen: performance.now() });
+        Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, w: (m.w | 0) % SLOTS.length, med: m.med | 0, seen: performance.now() });
       } else if (m.t === "shot") {
         const mt = this.mates.get(from);
-        if (!mt || mt.dead) return;
+        const w = WEAPONS[m.w as WeaponId];
+        if (!mt || mt.dead || !w || !w.pellets || !Array.isArray(m.as)) return;
         mt.muzzle = 0.06; mt.hum.recoil = 1;
-        this.bullets.push({ x: m.x, y: m.y, dx: Math.cos(m.a), dy: Math.sin(m.a), life: 0.6, d: 0, bounces: 0 });
-        sfx("shot", this.near(m.x, m.y) * 0.8);
-        send({ t: "fx", k: "shot", who: from, x: m.x, y: m.y, a: m.a }, undefined, from);
+        const as = (m.as as number[]).slice(0, w.pellets).map(Number);
+        this.bullets.push(...shotBullets(w, m.x, m.y, as, false));
+        sfx(w.sound, this.near(m.x, m.y) * 0.8);
+        send({ t: "fx", k: "shot", who: from, x: m.x, y: m.y, as, w: w.id }, undefined, from);
+      } else if (m.t === "heal") {
+        const mt = this.mates.get(from);
+        if (mt && !mt.dead) mt.hp = Math.min(S.maxHp, mt.hp + MED_HEAL);
       } else if (m.t === "chat") {
         const who = this.mates.get(from)?.name ?? "Игрок";
         const text = String(m.text ?? "").slice(0, 120);
@@ -1456,7 +1627,9 @@ class Game extends Phaser.Scene {
         this.addChat(who, text);
         send({ t: "chat", who, text }, undefined, from);
       } else if (m.t === "nade") {
-        if (this.mates.get(from)?.dead) return;
+        const mt = this.mates.get(from);
+        if (mt?.dead) return;
+        if (mt) mt.hum.recoil = 1;
         this.spawnNade(m.x, m.y, m.z, m.vx, m.vy, m.vz);
       }
       return;
@@ -1472,15 +1645,17 @@ class Game extends Phaser.Scene {
       case "hurt": this.hurtPlayer(m.dmg, true); break;
       case "give":
         if (m.k === "grenade") { S.grenades++; sfx("pickup"); S.msg = "+1 граната"; }
-        else { sfx("heal"); S.msg = "+35 здоровья"; }
+        else if (m.k === "armor") { sfx("armor"); S.msg = "Бронежилет"; }
+        else { S.medkits = Math.min(MAX_MED, S.medkits + 1); sfx("pickup"); S.msg = "+1 аптечка (Q)"; }
         S.msgT = 0.9;
         break;
       case "fx":
         if (m.k === "shot") {
-          this.bullets.push({ x: m.x, y: m.y, dx: Math.cos(m.a), dy: Math.sin(m.a), life: 0.6, d: 0, bounces: 0, vis: true });
+          const w = WEAPONS[m.w as WeaponId] ?? WEAPONS.rifle;
+          this.bullets.push(...shotBullets(w, m.x, m.y, Array.isArray(m.as) ? m.as : [m.a], true));
           const mt = this.mates.get(m.who);
           if (mt) { mt.muzzle = 0.06; mt.hum.recoil = 1; }
-          sfx("shot", this.near(m.x, m.y) * 0.8);
+          sfx(w.sound, this.near(m.x, m.y) * 0.8);
         }
         break;
       case "restart": this.scene.restart(); break;
@@ -1498,10 +1673,10 @@ class Game extends Phaser.Scene {
       if (this.snapT > 0) return;
       this.snapT = 1 / 20;
       const r2 = (v: number) => Math.round(v * 100) / 100;
-      const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0, S.myName]];
-      for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0, mt.name]);
+      const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0, S.myName, S.weapon, Math.ceil(S.armor)]];
+      for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0, mt.name, mt.w, Math.ceil(mt.armor)]);
       const E = this.enemies.filter((e) => !e.dead).map((e) => [e.id, KIND_LIST.indexOf(e.kind), e.x | 0, e.y | 0, r2(e.a), r2(e.ph), e.hitT > 0 ? 1 : 0, e.hum ? (e.hum.armsOn[0] ? 1 : 0) | (e.hum.armsOn[1] ? 2 : 0) : 3]);
-      const I = this.items.map((it) => [it.id, it.kind === "medkit" ? 1 : 0, it.x | 0, it.y | 0]);
+      const I = this.items.map((it) => [it.id, ITEM_KINDS.indexOf(it.kind), it.x | 0, it.y | 0]);
       const N = this.nades.map((n) => [n.x | 0, n.y | 0, n.z | 0, r2(n.spin), n.t < 0.7 && Math.sin(n.t * 40) > 0 ? 1 : 0]);
       send({ t: "snap", P, E, I, N, w: S.wave, k: S.kills, s: S.score, lt: Math.round(this.light.t * 1e4) / 1e4, o: S.over ? 1 : 0 });
     } else if (NET.role === "client") {
@@ -1509,7 +1684,7 @@ class Game extends Phaser.Scene {
       if (this.inT > 0) return;
       this.inT = 1 / 30;
       const r2 = (v: number) => Math.round(v * 100) / 100;
-      send({ t: "in", x: this.px | 0, y: this.py | 0, aimA: r2(this.aimA), moveA: r2(this.moveA), ph: r2(this.ph), moving: r2(this.moving), gren: S.grenades });
+      send({ t: "in", x: this.px | 0, y: this.py | 0, aimA: r2(this.aimA), moveA: r2(this.moveA), ph: r2(this.ph), moving: r2(this.moving), gren: S.grenades, w: S.weapon, med: S.medkits });
     }
   }
 
@@ -1531,10 +1706,10 @@ class Game extends Phaser.Scene {
     // игроки
     const seen = new Set<string>();
     for (const p of m.P as any[]) {
-      const [id, x, y, aimA, moveA, moving, ph, muz, hp, dead, name] = p;
+      const [id, x, y, aimA, moveA, moving, ph, muz, hp, dead, name, w, armor] = p;
       if (id === NET.me && name) S.myName = name;
       if (id === NET.me) {
-        S.hp = hp;
+        S.hp = hp; S.armor = armor ?? 0;
         if (dead && !this.dead) this.die();
         else if (!dead && this.dead) this.revive();
         continue;
@@ -1542,7 +1717,7 @@ class Game extends Phaser.Scene {
       seen.add(id);
       const mt = this.mate(id, x, y);
       this.mateTarget(mt, x, y);
-      Object.assign(mt, { aimA, moveA, moving, ph, hp });
+      Object.assign(mt, { aimA, moveA, moving, ph, hp, w: w ?? 0, armor: armor ?? 0 });
       if (name && mt.name !== name) { mt.name = name; mt.label.setText(name); }
       if (muz) mt.muzzle = Math.max(mt.muzzle, 0.05);
       if (dead && !mt.dead) { mt.hum.body.setTint(0x777777); mt.hum.head.setTint(0x777777); mt.hum.back.clear(); mt.hum.front.clear(); }
@@ -1569,7 +1744,7 @@ class Game extends Phaser.Scene {
     const items = new Set<number>();
     for (const [id, k, x, y] of m.I as any[]) {
       items.add(id);
-      if (!this.items.some((it) => it.id === id)) this.dropItem(k ? "medkit" : "grenade", x, y, id);
+      if (!this.items.some((it) => it.id === id)) this.dropItem(ITEM_KINDS[k] ?? "grenade", x, y, id);
     }
     for (const it of this.items) if (!items.has(it.id)) it.life = 0;
     // летящие гранаты
@@ -1617,6 +1792,8 @@ class Game extends Phaser.Scene {
       m.hum.recoil = Math.max(0, m.hum.recoil - dt * 11);
       m.hum.c.setPosition(m.x, m.y).setDepth(m.y);
       m.label.setPosition(m.x, m.y - 36);
+      m.hum.weapon = SLOTS[m.w] ?? "rifle";
+      m.hum.setArmor(m.armor > 0);
       if (!m.dead) m.hum.pose(m.aimA, m.moveA, m.ph, m.moving, m.muzzle > 0);
     }
   }
@@ -1631,7 +1808,14 @@ class UI extends Phaser.Scene {
   net!: Phaser.GameObjects.Text;
   btn: Phaser.GameObjects.Text[] = [];
   chatT!: Phaser.GameObjects.Text;
+  /** ячейки оружия внизу (цифра, название, патроны) */
+  slotT: Phaser.GameObjects.Text[] = [];
+  /** окно снаряжения: герой крутится, надписи */
+  doll!: Humanoid;
+  invT: Phaser.GameObjects.Text[] = [];
+  bagT!: Phaser.GameObjects.Text;
   constructor() { super("ui"); }
+  get gm() { return this.scene.get("game") as Game; }
   create() {
     const font = "system-ui, Segoe UI, Roboto, sans-serif";
     this.g = this.add.graphics();
@@ -1641,20 +1825,119 @@ class UI extends Phaser.Scene {
     this.net = this.add.text(0, 0, "", { fontFamily: font, fontSize: "15px", fontStyle: "700", color: "#bfe0ff", stroke: "#14110d", strokeThickness: 4 }).setOrigin(0.5, 0);
     this.btn = [0, 1].map(() => this.add.text(0, 0, "", { fontFamily: font, fontSize: "17px", fontStyle: "700", color: "#ffe2a0" }).setOrigin(0.5).setDepth(2).setVisible(false));
     this.help = this.add.text(0, 0, "", { fontFamily: font, fontSize: "13px", color: "#e8e0cc", stroke: "#14110d", strokeThickness: 3, align: "right" }).setOrigin(1, 1);
+    this.slotT = SLOTS.map(() => this.add.text(0, 0, "", { fontFamily: font, fontSize: "12px", fontStyle: "700", color: "#f2ead8", align: "center", lineSpacing: 1 }).setOrigin(0.5).setDepth(1));
+    this.bagT = this.add.text(0, 0, "", { fontFamily: font, fontSize: "11px", fontStyle: "700", color: "#f2ead8" }).setOrigin(0.5).setDepth(1);
+    // окно снаряжения
+    this.doll = new Humanoid(this, 0, 0, "hero", PAL_HERO, true);
+    this.doll.c.setScale(3.6).setDepth(4).setVisible(false);
+    this.doll.contact.setAlpha(0.4);
+    this.invT = Array.from({ length: 14 }, () => this.add.text(0, 0, "", { fontFamily: font, fontSize: "14px", fontStyle: "700", color: "#f2ead8", align: "center", lineSpacing: 2 }).setOrigin(0.5).setDepth(5).setVisible(false));
+  }
+
+  /** окно снаряжения: герой, здоровье и броня, оружие (клик — взять), гранаты, аптечки (клик — лечиться) */
+  drawInv(g: Phaser.GameObjects.Graphics, w: number, h: number, hits: Hit[]) {
+    const gm = this.gm;
+    const pw = Math.min(640, w - 20), ph = Math.min(420, h - 20), x0 = (w - pw) / 2, y0 = (h - ph) / 2;
+    const T = this.invT; let ti = 0;
+    const text = (x: number, y: number, s: string, size = 14, color = "#f2ead8", ox = 0.5) => T[ti++].setPosition(x, y).setText(s).setFontSize(size).setColor(color).setOrigin(ox, 0.5).setVisible(true);
+    g.fillStyle(0x000000, 0.45).fillRect(0, 0, w, h);
+    g.fillStyle(0x1c1812, 0.96).fillRoundedRect(x0, y0, pw, ph, 14).lineStyle(2, 0xffe2a0, 0.6).strokeRoundedRect(x0, y0, pw, ph, 14);
+    text(x0 + 18, y0 + 24, `Снаряжение · ${S.myName}`, 18, "#ffe2a0", 0);
+    // закрыть
+    g.lineStyle(3, 0xf2ead8, 0.8).lineBetween(x0 + pw - 34, y0 + 14, x0 + pw - 18, y0 + 30).lineBetween(x0 + pw - 18, y0 + 14, x0 + pw - 34, y0 + 30);
+    hits.push({ x: x0 + pw - 44, y: y0 + 4, w: 40, h: 40, fn: () => gm.toggleInv() });
+    // герой крутится на подставке
+    const narrow = pw < 520;
+    const dw = narrow ? 0 : 200, dx = x0 + 18 + dw / 2, dy = y0 + ph * 0.55;
+    if (!narrow) {
+      g.fillStyle(0x2a241a, 1).fillRoundedRect(x0 + 18, y0 + 46, dw, ph - 64, 10);
+      const d = this.doll, a = performance.now() / 1000 * 0.9;
+      d.c.setPosition(dx, dy + 40).setVisible(true);
+      d.weapon = SLOTS[S.weapon];
+      d.setArmor(S.armor > 0);
+      d.recoil = Math.max(0, d.recoil - 0.05);
+      d.pose(a, a, 0, 0, false);
+      if (gm.dead) { d.body.setTint(0x777777); d.head.setTint(0x777777); } else { d.body.clearTint(); d.head.clearTint(); }
+    } else this.doll.c.setVisible(false);
+    // полоски здоровья и брони
+    const rx = x0 + 36 + dw, rw = pw - dw - 54;
+    const bar = (y: number, label: string, v: number, max: number, col: number) => {
+      text(rx, y, `${label}: ${Math.ceil(v)}/${max}`, 14, "#f2ead8", 0);
+      g.fillStyle(0x0c0a07, 1).fillRoundedRect(rx, y + 12, rw, 12, 4); if (v > 0) g.fillStyle(col).fillRoundedRect(rx + 1, y + 13, Math.max(6, (rw - 2) * Math.min(1, v / max)), 10, 3);
+    };
+    bar(y0 + 62, "Здоровье", S.hp, S.maxHp, S.hp / S.maxHp > 0.5 ? 0x6cc04a : S.hp / S.maxHp > 0.25 ? 0xe0b030 : 0xd83a2a);
+    bar(y0 + 104, "Броня", S.armor, 100, 0x6a8ac8);
+    // оружие
+    text(rx, y0 + 150, "Оружие (клик — взять)", 13, "#c8bfa8", 0);
+    const sw = (rw - 3 * 8) / 4, sy = y0 + 166, sh = 66;
+    SLOTS.forEach((id, i) => {
+      const W_ = WEAPONS[id], sx = rx + i * (sw + 8), sel = S.weapon === i, own = S.owned[i];
+      g.fillStyle(sel ? 0x4a3c1c : 0x2a241a, 1).fillRoundedRect(sx, sy, sw, sh, 8).lineStyle(2, sel ? 0xffe2a0 : 0x5a5040, sel ? 1 : 0.8).strokeRoundedRect(sx, sy, sw, sh, 8);
+      const am = id === "grenade" ? `${S.grenades}` : `${S.clip[id]}/${W_.mag}`;
+      text(sx + sw / 2, sy + sh / 2, own ? `${i + 1}\n${W_.short}\n${am}` : `${i + 1}\n—`, 13, sel ? "#ffe2a0" : "#f2ead8");
+      if (own) hits.push({ x: sx, y: sy, w: sw, h: sh, fn: () => gm.selectWeapon(i) });
+    });
+    // предметы
+    text(rx, y0 + 256, "Предметы", 13, "#c8bfa8", 0);
+    const iy = y0 + 272, iw = (rw - 8) / 2, ih = 52;
+    g.fillStyle(0x2a241a, 1).fillRoundedRect(rx, iy, iw, ih, 8).lineStyle(2, 0x5a5040, 0.8).strokeRoundedRect(rx, iy, iw, ih, 8);
+    g.fillStyle(0x5e6e2c).fillEllipse(rx + 24, iy + 28, 16, 20).fillStyle(0x9a9a92).fillRect(rx + 21, iy + 13, 6, 5);
+    text(rx + 42, iy + ih / 2, `Гранаты: ${S.grenades}\n${S.touch ? "клик — взять" : "G / ПКМ — бросить"}`, 12, "#f2ead8", 0);
+    hits.push({ x: rx, y: iy, w: iw, h: ih, fn: () => gm.selectWeapon(3) });
+    const mx = rx + iw + 8;
+    g.fillStyle(S.medkits ? 0x4a1c1c : 0x2a241a, 1).fillRoundedRect(mx, iy, iw, ih, 8).lineStyle(2, S.medkits ? 0xff7060 : 0x5a5040, 0.8).strokeRoundedRect(mx, iy, iw, ih, 8);
+    g.fillStyle(0xeeeeee).fillRoundedRect(mx + 12, iy + 16, 24, 20, 3).fillStyle(0xd83a2a).fillRect(mx + 21, iy + 19, 6, 14).fillRect(mx + 17, iy + 23, 14, 6);
+    text(mx + 44, iy + ih / 2, `Аптечки: ${S.medkits}/${MAX_MED}\nклик или Q — +${MED_HEAL}`, 12, "#f2ead8", 0);
+    hits.push({ x: mx, y: iy, w: iw, h: ih, fn: () => gm.useMedkit() });
+    text(narrow ? x0 + pw / 2 : rx + rw / 2, y0 + ph - 22, S.touch ? "Коснись вне окна, чтобы закрыть" : `I или Tab — закрыть${NET.role === "solo" ? " · игра на паузе" : ""}`, 12, "#a89f88");
+    // клик мимо окна — закрыть
+    hits.push({ x: 0, y: 0, w, h: y0, fn: () => gm.toggleInv() }, { x: 0, y: y0 + ph, w, h: h - y0 - ph, fn: () => gm.toggleInv() }, { x: 0, y: 0, w: x0, h, fn: () => gm.toggleInv() }, { x: x0 + pw, y: 0, w: w - x0 - pw, h, fn: () => gm.toggleInv() });
+    // внутри окна клик по пустому месту — ничего
+    hits.push({ x: x0, y: y0, w: pw, h: ph, fn: () => {} });
   }
   update() {
     const w = this.scale.width, h = this.scale.height, g = this.g.clear();
     for (const b of this.btn) b.setVisible(false);
+    for (const t of this.invT) t.setVisible(false);
+    for (const t of this.slotT) t.setVisible(false);
+    this.bagT.setVisible(false);
+    this.doll.c.setVisible(false);
+    const hits: Hit[] = [];
+    const gm = this.gm;
     // на паузе и после смерти нужен обычный курсор (нажимать кнопки), в игре — только прицел
-    const want = S.paused || S.over ? "default" : "none";
+    const want = S.paused || S.over || S.inv ? "default" : "none";
     const el = document.getElementById("game");
     if (el && el.style.cursor !== want) { el.style.cursor = want; this.game.canvas.style.cursor = want; }
     // полоска здоровья
     g.fillStyle(0x14110d, 0.8).fillRoundedRect(14, 14, 204, 18, 5);
     const f = S.hp / S.maxHp;
     g.fillStyle(f > 0.5 ? 0x6cc04a : f > 0.25 ? 0xe0b030 : 0xd83a2a).fillRoundedRect(16, 16, 200 * f, 14, 4);
-    this.info.setText(`Патроны: ${S.reload > 0 ? "перезарядка…" : `${S.ammo}/${S.mag}`}   Гранаты: ${S.grenades}\nВолна: ${S.wave}   Убито: ${S.kills}   Очки: ${S.score}\n${S.daytime}`);
-    this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду · Enter — чат");
+    // броня — синяя полоска под здоровьем
+    if (S.armor > 0) g.fillStyle(0x14110d, 0.8).fillRoundedRect(14, 33, 204, 9, 4).fillStyle(0x6a8ac8).fillRoundedRect(16, 35, 200 * Math.min(1, S.armor / 100), 5, 2);
+    const cw = WEAPONS[SLOTS[S.weapon]];
+    const ammo = cw.id === "grenade" ? `${S.grenades}` : S.reload > 0 ? "перезарядка…" : `${S.clip[cw.id]}/${cw.mag}`;
+    this.info.setPosition(16, 46).setText(`${cw.name}: ${ammo}   Гранаты: ${S.grenades}   Аптечки: ${S.medkits}${S.armor > 0 ? `   Броня: ${Math.ceil(S.armor)}` : ""}\nВолна: ${S.wave}   Убито: ${S.kills}   Очки: ${S.score}\n${S.daytime}`);
+    this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · 1–4 или колесо — оружие · G или ПКМ — граната · Q — аптечка · I — снаряжение · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду · Enter — чат");
+    // ячейки оружия: на компьютере внизу по центру, на тачскрине — вверху (внизу стики)
+    if (!S.over && !S.inv) {
+      const sw = 80, sh = 44, gap = 6, tot = SLOTS.length * sw + (SLOTS.length - 1) * gap;
+      const bx = (w - tot) / 2, by = S.touch ? (NET.role === "host" ? 46 : 12) : h - sh - (S.touch ? 0 : this.help.height) - 16;
+      SLOTS.forEach((id, i) => {
+        if (!S.owned[i]) return;
+        const x = bx + i * (sw + gap), sel = S.weapon === i, W_ = WEAPONS[id];
+        g.fillStyle(0x14110d, sel ? 0.8 : 0.5).fillRoundedRect(x, by, sw, sh, 7).lineStyle(2, sel ? 0xffe2a0 : 0xf2ead8, sel ? 0.95 : 0.25).strokeRoundedRect(x, by, sw, sh, 7);
+        const am = id === "grenade" ? `×${S.grenades}` : sel && S.reload > 0 ? "…" : `${S.clip[id]}/${W_.mag}`;
+        this.slotT[i].setPosition(x + sw / 2, by + sh / 2).setText(`${S.touch ? "" : `${i + 1} `}${W_.short}\n${am}`).setColor(sel ? "#ffe2a0" : "#d8d0bc").setVisible(true);
+        hits.push({ x, y: by, w: sw, h: sh, fn: () => gm.selectWeapon(i) });
+      });
+      // кнопка «снаряжение» (рюкзак) слева от паузы/чата
+      const kx = w - 104, ky = 12;
+      g.fillStyle(0x14110d, 0.55).fillRoundedRect(kx, ky, 42, 42, 8);
+      g.fillStyle(0x8a6a3a, 0.95).fillRoundedRect(kx + 10, ky + 12, 22, 22, 5).lineStyle(2.5, 0x8a6a3a, 0.95).strokeRoundedRect(kx + 15, ky + 6, 12, 10, 4);
+      g.fillStyle(0x5a4426, 1).fillRoundedRect(kx + 14, ky + 21, 14, 8, 2);
+      if (!S.touch) this.bagT.setPosition(kx + 21, ky + 50).setText("I").setVisible(true);
+      hits.push({ x: kx, y: ky, w: 42, h: 42, fn: () => gm.toggleInv() });
+    }
     // кооператив: код и число игроков
     const n = NET.conns.size + 1;
     this.net.setPosition(w / 2, 14).setDepth(1).setText(NET.role === "host" ? `Кооператив · код ${NET.code} · игроков: ${n}   [скопировать ссылку${S.touch ? "" : " — C"}]` : NET.role === "client" ? `Кооператив · ты в игре ${NET.code}` : NET.status);
@@ -1671,6 +1954,9 @@ class UI extends Phaser.Scene {
           this.btn[i].setPosition(bx, by + 25).setText(label).setVisible(true);
         }
       }
+    } else if (S.inv && !S.over) {
+      this.big.setAlpha(0);
+      this.drawInv(g, w, h, hits);
     } else if (S.over) {
       g.fillStyle(0x000000, 0.55).fillRect(0, 0, w, h);
       this.big.setPosition(w / 2, h / 2).setText(`Тебя съели\nВолна ${S.wave} · Убито ${S.kills} · Очки ${S.score}\n\n${S.touch ? "Коснись" : "Кликни или нажми пробел"}, чтобы начать заново${NET.role === "client" ? " (решает хозяин)" : ""}`).setFontSize(Math.min(34, w / 22)).setAlpha(1);
@@ -1695,7 +1981,7 @@ class UI extends Phaser.Scene {
     this.chatT.setPosition(16, h - (S.touch ? 190 : 112)).setText(lines.map((c) => `${c.who}: ${c.text}`)).setWordWrapWidth(Math.min(460, w - 32))
       .setAlpha(lines.length && !S.chatOpen ? Phaser.Math.Clamp((12000 - (now - lines[lines.length - 1].t)) / 1500, 0.35, 1) : 1);
     // стики на тачскрине
-    if (S.touch && !S.over) {
+    if (S.touch && !S.over && !S.inv) {
       const stick = (st: Stick | null, label: string, col: number, defX: number) => {
         const ox = st ? st.ox : defX, oy = st ? st.oy : h - 110;
         g.lineStyle(3, 0xffffff, st ? 0.5 : 0.25).strokeCircle(ox, oy, 55).fillStyle(0xffffff, 0.08).fillCircle(ox, oy, 55);
@@ -1710,7 +1996,16 @@ class UI extends Phaser.Scene {
       const bx = w - 110, by = h - 235;
       g.fillStyle(0x14110d, 0.45).fillCircle(bx, by, 30).lineStyle(3, 0xffffff, S.grenades ? 0.5 : 0.2).strokeCircle(bx, by, 30);
       g.fillStyle(0x5e6e2c, S.grenades ? 0.95 : 0.35).fillEllipse(bx, by + 3, 18, 22).fillStyle(0x9a9a92, S.grenades ? 0.95 : 0.35).fillRect(bx - 3, by - 13, 6, 6);
+      // кнопка аптечки — левее гранаты
+      if (!S.inv) {
+        const hx = w - 190, hy = h - 215, on = S.medkits > 0;
+        g.fillStyle(0x14110d, 0.45).fillCircle(hx, hy, 26).lineStyle(3, 0xffffff, on ? 0.5 : 0.2).strokeCircle(hx, hy, 26);
+        g.fillStyle(0xeeeeee, on ? 0.95 : 0.3).fillRoundedRect(hx - 11, hy - 9, 22, 18, 3).fillStyle(0xd83a2a, on ? 1 : 0.35).fillRect(hx - 2.5, hy - 7, 5, 14).fillRect(hx - 7, hy - 2.5, 14, 5);
+        hits.push({ x: hx - 28, y: hy - 28, w: 56, h: 56, fn: () => gm.useMedkit() });
+      }
     }
+    // горячие точки (в окне снаряжения — только его кнопки и «мимо окна»)
+    S.hits = S.paused || S.over ? [] : hits;
   }
 }
 
