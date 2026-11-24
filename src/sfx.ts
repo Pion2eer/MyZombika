@@ -12,7 +12,10 @@ const last: Partial<Record<Sfx, number>> = {};
 /** не чаще, чем раз в N секунд (иначе каша из одинаковых звуков) */
 const GAP: Partial<Record<Sfx, number>> = { hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
 
-export function toggleMute() { muted = !muted; if (out) out.gain.value = muted ? 0 : 0.9; return muted; }
+let volume = 0.9;
+export function toggleMute() { muted = !muted; if (out) out.gain.value = muted ? 0 : volume; return muted; }
+/** громкость 0..1 и выключение (из настроек) */
+export function setSound(v: number, mute: boolean) { volume = Math.max(0, Math.min(1, v)) * 0.9; muted = mute; if (out) out.gain.value = muted ? 0 : volume; }
 /** браузер разрешает звук только после первого клика/нажатия */
 export function unlockAudio() { init(); void ctx?.resume(); }
 
@@ -23,7 +26,7 @@ function init() {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.ratio.value = 6;
     out = ctx.createGain();
-    out.gain.value = muted ? 0 : 0.9;
+    out.gain.value = muted ? 0 : volume;
     out.connect(comp).connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);

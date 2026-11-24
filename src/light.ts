@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 // Освещение: смена дня и ночи, тени от солнца и свет героя (фонарь вокруг + луч по прицелу)
 // с настоящими тенями от деревьев, камней и врагов (2D-видимость: от каждого круга-препятствия
 // строится «теневой клин» от источника света).
@@ -104,6 +105,8 @@ export class Lighting {
   /** яркость луча фонаря (0..1) */
   BEAM = 0.55;
   CONE = 430;
+  /** тени от фонаря (на низком качестве выключены) */
+  shadows = true;
 
   constructor(private scene: Phaser.Scene, startT: number) {
     this.t = startT;
@@ -318,7 +321,7 @@ export class Lighting {
     if (k > 0.02) {
       L.draw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setTint(0xe08a3c).setAlpha(this.LAMP * k).setBlendMode(Phaser.BlendModes.ADD));
       L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setTint(0xfff2dc).setAlpha(this.BEAM * k).setBlendMode(Phaser.BlendModes.ADD));
-      L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
+      if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
     }
     // вспышка выстрела — тёплая, у дула
     if (flash > 0) L.draw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.6, this.R * 1.6).setTint(0xffb050).setAlpha(flash * (0.25 + 0.5 * night)).setBlendMode(Phaser.BlendModes.ADD));
@@ -350,7 +353,7 @@ export class Lighting {
     L.draw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setAlpha(this.LAMP));
     L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setAlpha(1));
     // 2) тени: клин за каждым кругом, вырезаем из света
-    L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
+    if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ));
     // сами предметы и враги освещены со стороны фонаря: рисуем их силуэт светом нужной яркости
     for (const o of occ) {
       if (!o.obj) continue;
@@ -389,6 +392,6 @@ export class Lighting {
   /** время суток текстом */
   label() {
     const t = this.sun.t;
-    return t < 0.06 || t > 0.95 ? "Рассвет" : t < 0.44 ? "День" : t < 0.56 ? "Закат" : "Ночь";
+    return tr(t < 0.06 || t > 0.95 ? "dawn" : t < 0.44 ? "day" : t < 0.56 ? "dusk" : "night");
   }
 }

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 // Сеть для кооператива: игроки соединяются напрямую (WebRTC через PeerJS), своего сервера не нужно.
 // Хозяин (host) считает монстров, волны, попадания; гости присылают свои движения и выстрелы,
 // хозяин рассылает всем снимок мира ~15 раз в секунду и события (убийства, взрывы, выстрелы).
@@ -41,7 +42,7 @@ export function host(want?: string, tries = 8): Promise<string> {
     const code = want ?? Array.from({ length: 5 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
     const peer = new Peer(PREFIX + code, opts());
     NET.peer = peer;
-    NET.status = "Подключаюсь…";
+    NET.status = t("connecting");
     peer.on("open", () => {
       NET.role = "host"; NET.code = code; NET.me = "host"; NET.status = "";
       res(code);
@@ -57,9 +58,9 @@ export function host(want?: string, tries = 8): Promise<string> {
         setTimeout(() => host(want, tries - 1).then(res, rej), 2000);
         return;
       }
-      if (NET.role === "host") { NET.status = "Ошибка сети: " + e.type; return; } // после старта — не роняем игру
+      if (NET.role === "host") { NET.status = t("net_err", { e: e.type }); return; } // после старта — не роняем игру
       peer.destroy(); if (NET.peer === peer) NET.peer = null;
-      NET.status = "Ошибка сети: " + e.type; rej(e);
+      NET.status = t("net_err", { e: e.type }); rej(e);
     });
   });
 }
@@ -69,7 +70,7 @@ export function join(code: string): Promise<void> {
   return new Promise((res, rej) => {
     const peer = new Peer(opts());
     NET.peer = peer;
-    NET.status = "Подключаюсь…";
+    NET.status = t("connecting");
     peer.on("open", (id) => {
       const c = peer.connect(PREFIX + code.trim().toUpperCase(), { reliable: true, serialization: "json" });
       c.on("open", () => {
@@ -81,11 +82,11 @@ export function join(code: string): Promise<void> {
       });
       c.on("error", (e) => { peer.destroy(); if (NET.peer === peer) NET.peer = null; rej(e); });
       // хозяин не ответил за 8 с — неудача (иначе ожидание может зависнуть)
-      setTimeout(() => { if (NET.role !== "client" && !peer.destroyed) { NET.status = NET.status || "Игра не отвечает"; peer.destroy(); if (NET.peer === peer) NET.peer = null; rej(new Error("timeout")); } }, 8000);
+      setTimeout(() => { if (NET.role !== "client" && !peer.destroyed) { NET.status = NET.status || t("no_answer"); peer.destroy(); if (NET.peer === peer) NET.peer = null; rej(new Error("timeout")); } }, 8000);
     });
     peer.on("error", (e) => {
       if (NET.role === "client") return;
-      NET.status = e.type === "peer-unavailable" ? "Игра с таким кодом не найдена" : "Ошибка сети: " + e.type;
+      NET.status = e.type === "peer-unavailable" ? t("not_found", { c: code }) : t("net_err", { e: e.type });
       peer.destroy(); if (NET.peer === peer) NET.peer = null;
       rej(e);
     });
