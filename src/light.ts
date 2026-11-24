@@ -397,7 +397,13 @@ export class Lighting {
   /** WebGL: цветная карта света → шейдер умножает на неё картинку */
   private shaderLight(px: number, py: number, aim: number, flash: number, muzzle: { x: number; y: number }, occ: Circle[]) {
     const { day, warm } = this.sun, night = 1 - day;
-    const v = this.scene.cameras.main.worldView, M = this.lmap!;
+    // карта света должна совпадать с видимой частью мира. При повороте телефона / входе в полный экран
+    // размер окна и зум камеры меняются в разных обработчиках, и карта могла остаться от старого зума —
+    // тогда свет «съезжал» от героя. Сверяем каждый кадр и пересоздаём при расхождении.
+    const cam = this.scene.cameras.main;
+    const needW = Math.ceil(this.scene.scale.width / cam.zoom), needH = Math.ceil(this.scene.scale.height / cam.zoom);
+    if (!this.lmap || Math.abs(this.lmap.width - needW) > 2 || Math.abs(this.lmap.height - needH) > 2 || this.light.width < needW || this.light.height < needH) this.makeRT();
+    const v = cam.worldView, M = this.lmap!;
     const ox = v.x, oy = v.y;
     // окружающий свет: день — нейтральный (0.5 = без изменений), закат — тёплый, ночь — тёмно-синяя луна
     const mix = (a: number[], b: number[], t: number) => a.map((x, i) => x + (b[i] - x) * t);
