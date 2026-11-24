@@ -24,7 +24,7 @@ const START_WAVE = Math.max(1, Number(new URLSearchParams(location.search).get("
 interface Stick { id: number; ox: number; oy: number; x: number; y: number }
 export const S = (window as any).S = {
   hp: 100, maxHp: 100, grenades: 1, ammo: 30, mag: 30, reload: 0, wave: 0, kills: 0, score: 0, over: false,
-  msg: "", msgT: 0, daytime: "", net: "", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
+  msg: "", msgT: 0, daytime: "", net: "", chatOpen: false, chat: [] as { who: string; text: string; t: number; me: boolean }[], myName: "Игрок 1", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
 };
 
 // ───────── стопки срезов ─────────
@@ -198,7 +198,7 @@ interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; c
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
 interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; /** только для вида (у гостя): не ранит */ vis?: boolean }
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
-interface Mate { id: string; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number }
+interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number }
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
@@ -334,6 +334,8 @@ class Game extends Phaser.Scene {
     kb.on("keydown-H", () => this.hostGame());
     kb.on("keydown-J", () => this.joinGame());
     kb.on("keydown-C", () => copyInvite("link"));
+    kb.on("keydown-ENTER", () => this.openChat());
+    kb.on("keydown-T", () => this.openChat());
     kb.on("keydown-ESC", () => this.togglePause());
     kb.on("keydown-P", () => this.togglePause());
     kb.on("keydown-M", () => { S.msg = toggleMute() ? "Звук выключен" : "Звук включён"; S.msgT = 1.2; });
@@ -355,6 +357,8 @@ class Game extends Phaser.Scene {
       }
       // кнопка паузы в правом верхнем углу (для тачскрина)
       if (NET.role === "solo" && p.x > this.scale.width - 64 && p.y < 64) { this.togglePause(); return; }
+      // в кооперативе там же — кнопка чата
+      if (NET.role !== "solo" && p.x > this.scale.width - 64 && p.y < 64) { this.openChat(); return; }
       // надпись с кодом вверху — копирует ссылку
       if (NET.role === "host" && p.y < 40 && Math.abs(p.x - this.scale.width / 2) < 220) { copyInvite("link"); return; }
       S.touch = p.wasTouch;
@@ -599,7 +603,7 @@ class Game extends Phaser.Scene {
   }
 
   togglePause() {
-    if (S.over) return;
+    if (S.over || S.chatOpen) return;
     S.paused = !S.paused;
     if (NET.role !== "solo") return; // в кооперативе мир не останавливается
     S.paused ? this.tweens.pauseAll() : this.tweens.resumeAll();
@@ -1022,7 +1026,7 @@ class Game extends Phaser.Scene {
       const dx = S.move.x - S.move.ox, dy = S.move.y - S.move.oy, d = Math.hypot(dx, dy);
       if (d > 8) { const m = Math.min(1, d / 55); mx = (dx / d) * m; my = (dy / d) * m; }
     }
-    if (this.dead || S.paused) { mx = 0; my = 0; }
+    if (this.dead || S.paused || S.chatOpen) { mx = 0; my = 0; }
     const ml = Math.hypot(mx, my);
     if (ml > 1) { mx /= ml; my /= ml; }
     const spd = 175;
@@ -1050,7 +1054,7 @@ class Game extends Phaser.Scene {
       firing = this.input.activePointer.leftButtonDown() && !this.input.activePointer.wasTouch;
     }
 
-    if (this.dead || S.paused) firing = false;
+    if (this.dead || S.paused || S.chatOpen) firing = false;
     // ── стрельба ──
     this.player.recoil = Math.max(0, this.player.recoil - dt * 11);
     this.fireT -= dt; this.emptyT -= dt; this.muzzleT -= dt; this.invul -= dt; this.hurtT -= dt;
@@ -1323,7 +1327,7 @@ class Game extends Phaser.Scene {
     NET.onLeave = (id) => {
       if (NET.role === "client") { this.hostLost(); return; }
       const m = this.mates.get(id);
-      if (m) { m.hum.c.destroy(); this.mates.delete(id); }
+      if (m) { m.hum.c.destroy(); m.label.destroy(); this.mates.delete(id); }
       S.msg = "Друг вышел"; S.msgT = 2;
       this.checkAllDead();
     };
@@ -1348,7 +1352,7 @@ class Game extends Phaser.Scene {
     // монстры хозяина замирают и исчезают
     for (const e of this.enemies) e.c.destroy();
     for (const it of this.items) { it.img.destroy(); it.sh.destroy(); }
-    for (const m of this.mates.values()) m.hum.c.destroy();
+    for (const m of this.mates.values()) { m.hum.c.destroy(); m.label.destroy(); }
     for (const n of this.netNades) n.destroy();
     this.enemies = []; this.items = []; this.mates.clear(); this.netNades = [];
     this.waitUntil = performance.now() + 25000;
@@ -1356,7 +1360,9 @@ class Game extends Phaser.Scene {
   }
 
   sendHi(id: string) {
-    send({ t: "hi", x: Math.round(this.px + 40), y: Math.round(this.py + 20), lt: this.light.t }, id);
+    // имя гостю: то же, что у его фигурки здесь (фигурка заводится сразу, чтобы имя не поменялось)
+    const mt = this.mate(id, this.px + 40, this.py + 20);
+    send({ t: "hi", x: Math.round(this.px + 40), y: Math.round(this.py + 20), lt: this.light.t, name: mt.name }, id);
   }
   applyHi(m: Record<string, any>) {
     const p = this.collide(m.x, m.y, 10);
@@ -1369,10 +1375,65 @@ class Game extends Phaser.Scene {
   mate(id: string, x: number, y: number) {
     let m = this.mates.get(id);
     if (!m) {
-      m = { id, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: performance.now() };
+      const name = NET.role === "host" ? this.freeName() : "Игрок";
+      const label = this.add.text(x, y, name, { fontFamily: "system-ui, Segoe UI, Roboto, sans-serif", fontSize: "11px", fontStyle: "700", color: "#bfe0ff", stroke: "#14110d", strokeThickness: 3 }).setOrigin(0.5, 1).setDepth(1e6 + 2);
+      m = { id, name, label, hum: new Humanoid(this, x, y, "mate", PAL_MATE, true), x, y, tx: x, ty: y, gap: 0.05, last: 0, aimA: 0, moveA: 0, ph: 0, moving: 0, muzzle: 0, hp: 100, dead: false, gren: 1, seen: performance.now() };
       this.mates.set(id, m);
     }
     return m;
+  }
+
+  /** хозяин: свободное имя для нового игрока («Игрок 2», «Игрок 3»…) */
+  freeName() {
+    const used = new Set([...this.mates.values()].map((m) => m.name));
+    for (let i = 2; ; i++) if (!used.has(`Игрок ${i}`)) return `Игрок ${i}`;
+  }
+
+  // ───────── чат ─────────
+  chatEl?: HTMLInputElement;
+  openChat() {
+    if (NET.role === "solo") { S.msg = "Чат — в игре с друзьями"; S.msgT = 1.5; return; }
+    if (S.chatOpen) return;
+    if (!this.chatEl) {
+      const el = (this.chatEl = document.createElement("input"));
+      el.maxLength = 120;
+      el.placeholder = "Сообщение… (Enter — отправить, Esc — закрыть)";
+      Object.assign(el.style, { position: "fixed", left: "16px", bottom: "64px", width: "min(420px, calc(100vw - 32px))", padding: "8px 10px", font: "15px system-ui, Segoe UI, Roboto, sans-serif", color: "#f2ead8", background: "rgba(20,17,13,0.85)", border: "1px solid #bfe0ff", borderRadius: "8px", outline: "none", zIndex: "10", display: "none", cursor: "text" });
+      el.addEventListener("keydown", (ev) => {
+        ev.stopPropagation();
+        if (ev.key === "Enter") { this.sendChat(el.value); this.closeChat(); }
+        else if (ev.key === "Escape") this.closeChat();
+      });
+      el.addEventListener("keyup", (ev) => ev.stopPropagation());
+      el.addEventListener("blur", () => this.closeChat());
+      document.body.appendChild(el);
+    }
+    S.chatOpen = true;
+    const kb = this.input.keyboard!;
+    kb.enabled = false; kb.disableGlobalCapture(); kb.resetKeys();
+    this.chatEl.value = "";
+    this.chatEl.style.display = "block";
+    setTimeout(() => this.chatEl?.focus(), 0);
+  }
+  closeChat() {
+    if (!S.chatOpen || !this.chatEl) return;
+    S.chatOpen = false;
+    this.chatEl.style.display = "none";
+    this.chatEl.blur();
+    const kb = this.input.keyboard!;
+    kb.enabled = true; kb.enableGlobalCapture(); kb.resetKeys();
+  }
+  sendChat(raw: string) {
+    const text = raw.trim().slice(0, 120);
+    if (!text) return;
+    this.addChat(S.myName, text, true);
+    if (NET.role === "host") send({ t: "chat", who: S.myName, text });
+    else if (NET.role === "client") send({ t: "chat", text });
+  }
+  addChat(who: string, text: string, me = false) {
+    S.chat.push({ who, text, t: performance.now(), me });
+    if (S.chat.length > 30) S.chat.shift();
+    if (!me) sfx("pickup", 0.35);
   }
 
   onNet(from: string, m: Record<string, any>) {
@@ -1388,6 +1449,12 @@ class Game extends Phaser.Scene {
         this.bullets.push({ x: m.x, y: m.y, dx: Math.cos(m.a), dy: Math.sin(m.a), life: 0.6, d: 0, bounces: 0 });
         sfx("shot", this.near(m.x, m.y) * 0.8);
         send({ t: "fx", k: "shot", who: from, x: m.x, y: m.y, a: m.a }, undefined, from);
+      } else if (m.t === "chat") {
+        const who = this.mates.get(from)?.name ?? "Игрок";
+        const text = String(m.text ?? "").slice(0, 120);
+        if (!text) return;
+        this.addChat(who, text);
+        send({ t: "chat", who, text }, undefined, from);
       } else if (m.t === "nade") {
         if (this.mates.get(from)?.dead) return;
         this.spawnNade(m.x, m.y, m.z, m.vx, m.vy, m.vz);
@@ -1397,7 +1464,8 @@ class Game extends Phaser.Scene {
     // ── гость ──
     switch (m.t) {
       case "snap": this.applySnap(m); break;
-      case "hi": pendingHi = m; this.applyHi(m); break;
+      case "hi": pendingHi = m; this.applyHi(m); if (m.name) S.myName = m.name; break;
+      case "chat": this.addChat(String(m.who), String(m.text).slice(0, 120)); break;
       case "kill": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) this.kill(e, m.dir); break; }
       case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm); sfx("hit", this.near(e.x, e.y)); } break; }
       case "boom": this.explode(m.x, m.y); break;
@@ -1430,8 +1498,8 @@ class Game extends Phaser.Scene {
       if (this.snapT > 0) return;
       this.snapT = 1 / 20;
       const r2 = (v: number) => Math.round(v * 100) / 100;
-      const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0]];
-      for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0]);
+      const P: unknown[] = [["host", this.px | 0, this.py | 0, r2(this.aimA), r2(this.moveA), r2(this.moving), r2(this.ph), this.muzzleT > 0 ? 1 : 0, Math.ceil(S.hp), this.dead ? 1 : 0, S.myName]];
+      for (const mt of this.mates.values()) P.push([mt.id, mt.x | 0, mt.y | 0, r2(mt.aimA), r2(mt.moveA), r2(mt.moving), r2(mt.ph), mt.muzzle > 0 ? 1 : 0, Math.ceil(mt.hp), mt.dead ? 1 : 0, mt.name]);
       const E = this.enemies.filter((e) => !e.dead).map((e) => [e.id, KIND_LIST.indexOf(e.kind), e.x | 0, e.y | 0, r2(e.a), r2(e.ph), e.hitT > 0 ? 1 : 0, e.hum ? (e.hum.armsOn[0] ? 1 : 0) | (e.hum.armsOn[1] ? 2 : 0) : 3]);
       const I = this.items.map((it) => [it.id, it.kind === "medkit" ? 1 : 0, it.x | 0, it.y | 0]);
       const N = this.nades.map((n) => [n.x | 0, n.y | 0, n.z | 0, r2(n.spin), n.t < 0.7 && Math.sin(n.t * 40) > 0 ? 1 : 0]);
@@ -1463,7 +1531,8 @@ class Game extends Phaser.Scene {
     // игроки
     const seen = new Set<string>();
     for (const p of m.P as any[]) {
-      const [id, x, y, aimA, moveA, moving, ph, muz, hp, dead] = p;
+      const [id, x, y, aimA, moveA, moving, ph, muz, hp, dead, name] = p;
+      if (id === NET.me && name) S.myName = name;
       if (id === NET.me) {
         S.hp = hp;
         if (dead && !this.dead) this.die();
@@ -1474,12 +1543,13 @@ class Game extends Phaser.Scene {
       const mt = this.mate(id, x, y);
       this.mateTarget(mt, x, y);
       Object.assign(mt, { aimA, moveA, moving, ph, hp });
+      if (name && mt.name !== name) { mt.name = name; mt.label.setText(name); }
       if (muz) mt.muzzle = Math.max(mt.muzzle, 0.05);
       if (dead && !mt.dead) { mt.hum.body.setTint(0x777777); mt.hum.head.setTint(0x777777); mt.hum.back.clear(); mt.hum.front.clear(); }
       if (!dead && mt.dead) { mt.hum.body.clearTint(); mt.hum.head.clearTint(); }
       mt.dead = !!dead;
     }
-    for (const [id, mt] of this.mates) if (!seen.has(id)) { mt.hum.c.destroy(); this.mates.delete(id); }
+    for (const [id, mt] of this.mates) if (!seen.has(id)) { mt.hum.c.destroy(); mt.label.destroy(); this.mates.delete(id); }
     // монстры
     const byId = new Map(this.enemies.map((e) => [e.id, e]));
     const here = new Set<number>();
@@ -1546,6 +1616,7 @@ class Game extends Phaser.Scene {
       m.muzzle -= dt;
       m.hum.recoil = Math.max(0, m.hum.recoil - dt * 11);
       m.hum.c.setPosition(m.x, m.y).setDepth(m.y);
+      m.label.setPosition(m.x, m.y - 36);
       if (!m.dead) m.hum.pose(m.aimA, m.moveA, m.ph, m.moving, m.muzzle > 0);
     }
   }
@@ -1559,12 +1630,14 @@ class UI extends Phaser.Scene {
   help!: Phaser.GameObjects.Text;
   net!: Phaser.GameObjects.Text;
   btn: Phaser.GameObjects.Text[] = [];
+  chatT!: Phaser.GameObjects.Text;
   constructor() { super("ui"); }
   create() {
     const font = "system-ui, Segoe UI, Roboto, sans-serif";
     this.g = this.add.graphics();
     this.info = this.add.text(16, 40, "", { fontFamily: font, fontSize: "16px", fontStyle: "700", color: "#f2ead8", stroke: "#14110d", strokeThickness: 4 });
     this.big = this.add.text(0, 0, "", { fontFamily: font, fontSize: "40px", fontStyle: "800", color: "#ffe2a0", stroke: "#14110d", strokeThickness: 6, align: "center" }).setOrigin(0.5);
+    this.chatT = this.add.text(16, 0, "", { fontFamily: font, fontSize: "15px", color: "#f2ead8", stroke: "#14110d", strokeThickness: 4, lineSpacing: 2 }).setOrigin(0, 1);
     this.net = this.add.text(0, 0, "", { fontFamily: font, fontSize: "15px", fontStyle: "700", color: "#bfe0ff", stroke: "#14110d", strokeThickness: 4 }).setOrigin(0.5, 0);
     this.btn = [0, 1].map(() => this.add.text(0, 0, "", { fontFamily: font, fontSize: "17px", fontStyle: "700", color: "#ffe2a0" }).setOrigin(0.5).setDepth(2).setVisible(false));
     this.help = this.add.text(0, 0, "", { fontFamily: font, fontSize: "13px", color: "#e8e0cc", stroke: "#14110d", strokeThickness: 3, align: "right" }).setOrigin(1, 1);
@@ -1581,7 +1654,7 @@ class UI extends Phaser.Scene {
     const f = S.hp / S.maxHp;
     g.fillStyle(f > 0.5 ? 0x6cc04a : f > 0.25 ? 0xe0b030 : 0xd83a2a).fillRoundedRect(16, 16, 200 * f, 14, 4);
     this.info.setText(`Патроны: ${S.reload > 0 ? "перезарядка…" : `${S.ammo}/${S.mag}`}   Гранаты: ${S.grenades}\nВолна: ${S.wave}   Убито: ${S.kills}   Очки: ${S.score}\n${S.daytime}`);
-    this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду");
+    this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду · Enter — чат");
     // кооператив: код и число игроков
     const n = NET.conns.size + 1;
     this.net.setPosition(w / 2, 14).setDepth(1).setText(NET.role === "host" ? `Кооператив · код ${NET.code} · игроков: ${n}   [скопировать ссылку${S.touch ? "" : " — C"}]` : NET.role === "client" ? `Кооператив · ты в игре ${NET.code}` : NET.status);
@@ -1611,6 +1684,16 @@ class UI extends Phaser.Scene {
       if (S.paused) g.fillTriangle(w - 41, 22, w - 41, 44, w - 22, 33);
       else g.fillRect(w - 42, 22, 6, 22).fillRect(w - 30, 22, 6, 22);
     }
+    // кнопка чата (в кооперативе — на месте паузы)
+    if (NET.role !== "solo") {
+      g.fillStyle(0x14110d, 0.55).fillRoundedRect(w - 54, 12, 42, 42, 8).fillStyle(0xf2ead8, 0.9);
+      g.fillRoundedRect(w - 45, 21, 24, 16, 4).fillTriangle(w - 41, 36, w - 35, 36, w - 42, 43);
+    }
+    // чат: последние сообщения слева внизу, гаснут через 12 с (пока пишешь — видны все)
+    const now = performance.now();
+    const lines = S.chat.filter((c) => S.chatOpen || now - c.t < 12000).slice(-7);
+    this.chatT.setPosition(16, h - (S.touch ? 190 : 112)).setText(lines.map((c) => `${c.who}: ${c.text}`)).setWordWrapWidth(Math.min(460, w - 32))
+      .setAlpha(lines.length && !S.chatOpen ? Phaser.Math.Clamp((12000 - (now - lines[lines.length - 1].t)) / 1500, 0.35, 1) : 1);
     // стики на тачскрине
     if (S.touch && !S.over) {
       const stick = (st: Stick | null, label: string, col: number, defX: number) => {
