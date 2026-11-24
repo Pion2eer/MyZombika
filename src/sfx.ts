@@ -2,7 +2,7 @@
 export type Sfx =
   | "shot" | "casing" | "empty" | "reload" | "hit" | "splat" | "gore" | "thunk" | "ricochet"
   | "step" | "hurt" | "groan" | "growl" | "squeak" | "roar" | "wave" | "over"
-  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate";
+  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate" | "beat" | "cricket" | "bird";
 
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
@@ -131,6 +131,20 @@ export function sfx(kind: Sfx, vol = 1) {
       tone(t, 0.25, 0.3 * v, "sine", 110, 40);
       noise(t + 0.08, 0.2, 0.2 * v, "bandpass", 500, 200, 2);
       break;
+    case "beat": // сердце стучит (мало жизни)
+      tone(t, 0.12, 0.35 * v, "sine", 62, 40, 0.01);
+      tone(t + 0.2, 0.14, 0.28 * v, "sine", 58, 38, 0.01);
+      break;
+    case "cricket": { // сверчок ночью: несколько коротких трелей
+      const f = rnd(4200, 4800);
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) tone(t + i * 0.32 + j * 0.035, 0.025, 0.018 * v, "sine", f, f);
+      break;
+    }
+    case "bird": { // птица днём: два-три посвиста
+      const f = rnd(2400, 3400), n = 2 + Math.floor(rnd(0, 2));
+      for (let i = 0; i < n; i++) tone(t + i * 0.16, 0.11, 0.03 * v, "sine", f * 1.25, f * 0.9, 0.01);
+      break;
+    }
     case "clang": // пуля в железо (бочка, столб): звон
       click(t, 0.3 * v, 3200);
       tone(t, 0.35, 0.09 * v, "triangle", rnd(1400, 1900), rnd(1300, 1800));

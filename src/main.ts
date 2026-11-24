@@ -59,7 +59,7 @@ interface Hit { x: number; y: number; w: number; h: number; fn: () => void }
 // ───────── общее состояние для HUD ─────────
 interface Stick { id: number; ox: number; oy: number; x: number; y: number }
 export const S = (window as any).S = {
-  hp: 100, maxHp: 100, grenades: 1, reload: 0, wave: 0, kills: 0, score: 0, over: false, time: 0,
+  hp: 100, maxHp: 100, grenades: 1, reload: 0, wave: 0, kills: 0, score: 0, over: false, time: 0, hurtV: 0,
   /** оружие: выбранная ячейка (0..3), патроны в магазинах, какое оружие есть (в «волнах» — всё) */
   weapon: 0, clip: fullClips(), owned: [true, true, true, true],
   armor: 0, medkits: 0, inv: false, hits: [] as Hit[],
@@ -429,6 +429,7 @@ class Game extends Phaser.Scene {
   netNades: Phaser.GameObjects.Image[] = [];
   props: Prop[] = [];
   burns: Burn[] = [];
+  lookX = 0; lookY = 0; beatT = 0; ambT = 4;
   constructor() { super("game"); }
 
   preload() {
@@ -438,7 +439,7 @@ class Game extends Phaser.Scene {
   }
 
   create() {
-    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
+    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, hurtV: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
     this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.props = []; this.burns = [];
@@ -832,6 +833,20 @@ class Game extends Phaser.Scene {
       scale: { start: 0.65 * scale, end: 0.1 }, alpha: { start: 0.9, end: 0 }, tint: [0xffe080, 0xffa030, 0xff6020, 0xff4010],
       x: { min: -6 * scale, max: 6 * scale }, blendMode: Phaser.BlendModes.ADD,
     }).setDepth(y + 8);
+  }
+  /** облачко пыли из-под ног */
+  dust(x: number, y: number) {
+    if (settings.quality === "low") return;
+    for (let i = 0; i < 2; i++) {
+      const d = this.add.image(x + rand(-5, 5), y + rand(-2, 2), "dot").setTint(0x8a7a5a).setAlpha(0.32).setScale(0.6).setDepth(y - 1);
+      this.tweens.add({ targets: d, scale: rand(1.6, 2.4), alpha: 0, y: d.y - rand(3, 8), x: d.x + rand(-6, 6), duration: rand(380, 560), ease: "Quad.easeOut", onComplete: () => d.destroy() });
+    }
+  }
+  /** всплывающая надпись над миром (+очки) */
+  popup(x: number, y: number, s: string, color: string) {
+    const tx = this.add.text(x, y, s, { fontFamily: "system-ui, sans-serif", fontSize: "15px", fontStyle: "900", color, stroke: "#14110d", strokeThickness: 4 }).setOrigin(0.5).setDepth(1e6 + 2).setScale(0.6);
+    this.tweens.add({ targets: tx, scale: 1, duration: 120, ease: "Back.easeOut" });
+    this.tweens.add({ targets: tx, y: y - 30, alpha: 0, delay: 250, duration: 650, ease: "Quad.easeIn", onComplete: () => tx.destroy() });
   }
   /** ударная волна: светлое кольцо расходится по земле */
   shock(x: number, y: number, power: number) {
@@ -1372,7 +1387,7 @@ class Game extends Phaser.Scene {
     if (!fxOnly) { const ab = Math.min(S.armor, Math.round(dmg * ARMOR_ABSORB)); S.armor -= ab; S.hp -= dmg - ab; }
     this.invul = 0.3; this.hurtT = 0.12;
     this.cameras.main.shake(100, 0.0025);
-    this.cameras.main.flash(90, 140, 0, 0);
+    S.hurtV = Math.min(1, S.hurtV + 0.55 + dmg / 40); // красные края экрана (рисует UI)
     sfx("hurt");
     if (!fxOnly && S.hp <= 0) this.die();
   }
@@ -1656,6 +1671,7 @@ class Game extends Phaser.Scene {
     e.dead = true;
     S.kills++;
     S.score += KINDS[e.kind].score;
+    this.popup(e.x, e.y - 34, `+${KINDS[e.kind].score}`, e.kind === "bear" ? "#ffb040" : "#ffe2a0");
     const vol = this.near(e.x, e.y);
     sfx("gore", vol);
     if (e.kind === "rat") sfx("squeak", vol);
@@ -1736,7 +1752,7 @@ class Game extends Phaser.Scene {
     if (ml > 0.1) this.moveA = Math.atan2(my, mx);
     const ph0 = this.ph;
     this.ph += went * 0.12;
-    if (Math.floor(this.ph / Math.PI) !== Math.floor(ph0 / Math.PI)) sfx("step", 0.8);
+    if (Math.floor(this.ph / Math.PI) !== Math.floor(ph0 / Math.PI)) { sfx("step", 0.8); this.dust(this.px, this.py + 4); }
 
     // ── прицел ──
     const gunZ = lift(9);
@@ -1912,6 +1928,17 @@ class Game extends Phaser.Scene {
     this.updateMates(dt);
     this.netTick(dt);
 
+    // ── камера чуть впереди героя — туда, куда целишься ──
+    {
+      const look = this.dead || S.over ? 0 : S.touch ? (S.aim ? 48 : 0) : Phaser.Math.Clamp(aimDist * 0.2, 0, 80);
+      this.lookX = Phaser.Math.Linear(this.lookX, -Math.cos(this.aimA) * look, 0.06);
+      this.lookY = Phaser.Math.Linear(this.lookY, -Math.sin(this.aimA) * look * 0.8, 0.06);
+      cam.setFollowOffset(this.lookX, this.lookY);
+    }
+    // ── мало жизни — стучит сердце; вокруг — сверчки ночью, птицы днём ──
+    this.beatT -= dt; this.ambT -= dt;
+    if (!this.dead && !S.over && S.hp < 30 && this.beatT <= 0) { this.beatT = 0.6 + S.hp / 60; sfx("beat", 0.9); }
+    if (this.ambT <= 0) { this.ambT = rand(5, 12); sfx(this.light.night > 0.5 ? "cricket" : "bird", 0.7); }
     // ── линия прицела ──
     const g = this.aimG.clear();
     if (this.dead) return;
@@ -2457,6 +2484,7 @@ class UI extends Phaser.Scene {
   constructor() { super("ui"); }
   get gm() { return this.scene.get("game") as Game; }
   preload() { loadHudFiles(this); }
+  vig!: Phaser.GameObjects.Image;
   img(n: HudArt, x: number, y: number, sc = 1, alpha = 1) {
     let im = this.pool[this.pi++];
     if (!im) { im = this.add.image(0, 0, "hud_" + n).setDepth(0.5); this.pool.push(im); }
@@ -2527,6 +2555,15 @@ class UI extends Phaser.Scene {
   create() {
     const font = "system-ui, Segoe UI, Roboto, sans-serif";
     makeHudArt(this);
+    // красная виньетка: прозрачный центр, красные края
+    if (!this.textures.exists("vignette")) {
+      const cv = document.createElement("canvas"); cv.width = cv.height = 256;
+      const c = cv.getContext("2d")!, gr = c.createRadialGradient(128, 128, 70, 128, 128, 150);
+      gr.addColorStop(0, "rgba(230,10,10,0)"); gr.addColorStop(0.5, "rgba(220,10,10,.5)"); gr.addColorStop(1, "rgba(170,0,0,1)");
+      c.fillStyle = gr; c.fillRect(0, 0, 256, 256);
+      this.textures.addCanvas("vignette", cv);
+    }
+    this.vig = this.add.image(0, 0, "vignette").setOrigin(0).setDepth(-1).setAlpha(0);
     this.g = this.add.graphics();
     this.g2 = this.add.graphics().setDepth(0.45);
     this.info = this.add.text(16, 40, "", { fontFamily: font, fontSize: "16px", fontStyle: "700", color: "#f2ead8", stroke: "#14110d", strokeThickness: 4 });
@@ -2630,6 +2667,10 @@ class UI extends Phaser.Scene {
     const el = document.getElementById("game");
     if (el && el.style.cursor !== want) { el.style.cursor = want; this.game.canvas.style.cursor = want; }
     this.info.setText("");
+    // ранили — края экрана краснеют; мало жизни — пульсируют
+    S.hurtV = Math.max(0, S.hurtV - this.game.loop.delta / 1000 * 2.2);
+    const lowA = !S.over && S.hp > 0 && S.hp < 30 ? 0.5 + 0.35 * Math.max(0, Math.sin(performance.now() / 160)) : 0;
+    this.vig.setDisplaySize(w, h).setAlpha(Math.min(0.95, Math.max(S.hurtV, lowA))).setVisible(!S.menu);
     if (!S.over && !S.inv) this.drawTop(g, w, h);
     this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : t("help"));
     // ячейки оружия и рюкзак: внизу по центру (на тачскрине — между стиками, а если тесно — над кнопками справа)
