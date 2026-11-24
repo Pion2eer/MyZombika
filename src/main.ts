@@ -195,6 +195,25 @@ interface Mate { id: string; hum: Humanoid; x: number; y: number; tx: number; ty
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear"];
 const JOIN = new URLSearchParams(location.search).get("join");
 let autoJoined = false;
+const SITE = "https://myzombika.pion.ltd/";
+/** ссылка-приглашение: на сайте — его адрес, из файла на диске — адрес сайта */
+const inviteLink = (code: string) => `${location.protocol.startsWith("http") ? location.origin + location.pathname : SITE}?join=${code}`;
+/** скопировать текст в буфер обмена (с запасным способом для старых браузеров и file://) */
+function copyText(text: string) {
+  const old = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch { /* ничего */ }
+    ta.remove();
+  };
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(old); else old();
+}
+function copyInvite(what: "code" | "link") {
+  if (NET.role !== "host") return;
+  copyText(what === "code" ? NET.code : inviteLink(NET.code));
+  S.msg = what === "code" ? `Код ${NET.code} скопирован` : "Ссылка скопирована"; S.msgT = 1.8;
+}
 /** у гостя: где хозяин поставил героя (запоминаем — сцена могла перезапуститься) */
 let pendingHi: Record<string, any> | null = null;
 
@@ -298,6 +317,7 @@ class Game extends Phaser.Scene {
     kb.on("keydown-SPACE", () => S.over && this.restartGame());
     kb.on("keydown-H", () => this.hostGame());
     kb.on("keydown-J", () => this.joinGame());
+    kb.on("keydown-C", () => copyInvite("link"));
     kb.on("keydown-ESC", () => this.togglePause());
     kb.on("keydown-P", () => this.togglePause());
     kb.on("keydown-M", () => { S.msg = toggleMute() ? "Звук выключен" : "Звук включён"; S.msgT = 1.2; });
@@ -310,14 +330,17 @@ class Game extends Phaser.Scene {
       if (S.paused) {
         // на паузе: кнопки кооператива (для тачскрина)
         const w = this.scale.width, h = this.scale.height;
-        if (p.y > h * 0.68 && p.y < h * 0.68 + 54) {
-          if (Math.abs(p.x - (w / 2 - 120)) < 110) { this.hostGame(); return; }
-          if (Math.abs(p.x - (w / 2 + 120)) < 110) { this.joinGame(); return; }
+        if (p.y > h * 0.68 && p.y < h * 0.68 + 54 && NET.role !== "client") {
+          const left = Math.abs(p.x - (w / 2 - 120)) < 110, right = Math.abs(p.x - (w / 2 + 120)) < 110;
+          if (NET.role === "host") { if (left) { copyInvite("code"); return; } if (right) { copyInvite("link"); return; } }
+          else { if (left) { this.hostGame(); return; } if (right) { this.joinGame(); return; } }
         }
         this.togglePause(); return;
       }
       // кнопка паузы в правом верхнем углу (для тачскрина)
       if (p.x > this.scale.width - 64 && p.y < 64) { this.togglePause(); return; }
+      // надпись с кодом вверху — копирует ссылку
+      if (NET.role === "host" && p.y < 40 && Math.abs(p.x - this.scale.width / 2) < 220) { copyInvite("link"); return; }
       S.touch = p.wasTouch;
       if (!p.wasTouch) { if (p.rightButtonDown()) this.throwNade(); return; }
       // кнопка гранаты над правым стиком
@@ -1233,18 +1256,18 @@ class Game extends Phaser.Scene {
     if (NET.role !== "solo") return;
     S.msg = "Создаю игру…"; S.msgT = 2;
     netHost().then((code) => {
-      const web = location.protocol.startsWith("http");
-      const link = `${location.origin}${location.pathname}?join=${code}`;
-      if (web) navigator.clipboard?.writeText(link).catch(() => {});
-      S.msg = `Код для друга: ${code}`; S.msgT = 6;
+      copyText(inviteLink(code));
+      S.msg = `Код для друга: ${code}\nссылка уже скопирована`; S.msgT = 6;
       if (S.paused) this.togglePause();
     }).catch(() => { S.msg = NET.status || "Не удалось создать игру"; S.msgT = 4; });
   }
 
   joinGame(code?: string | null) {
     if (NET.role !== "solo") return;
-    code = code ?? window.prompt("Код игры друга (5 знаков):");
+    code = code ?? window.prompt("Код игры друга (5 знаков) или ссылка-приглашение:");
     if (!code) return;
+    // можно вставить ссылку целиком — берём код из неё
+    code = (code.match(/join=([A-Za-z0-9]{5})/)?.[1] ?? code).replace(/[^A-Za-z0-9]/g, "").slice(-5);
     S.msg = "Подключаюсь…"; S.msgT = 3;
     netJoin(code).then(() => {
       // мир теперь у хозяина: свои монстры и предметы убираем
@@ -1481,13 +1504,15 @@ class UI extends Phaser.Scene {
     this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch ? "" : "WASD — ходить · мышь — целиться · ЛКМ — стрелять · G или ПКМ — граната · R — перезарядка · M — звук · Esc — пауза · H — позвать друга · J — войти по коду");
     // кооператив: код и число игроков
     const n = NET.conns.size + 1;
-    this.net.setPosition(w / 2, 14).setText(NET.role === "host" ? `Кооператив · код ${NET.code} · игроков: ${n}` : NET.role === "client" ? `Кооператив · ты в игре ${NET.code}` : NET.status);
+    this.net.setPosition(w / 2, 14).setDepth(1).setText(NET.role === "host" ? `Кооператив · код ${NET.code} · игроков: ${n}   [скопировать ссылку${S.touch ? "" : " — C"}]` : NET.role === "client" ? `Кооператив · ты в игре ${NET.code}` : NET.status);
+    if (NET.role === "host") g.fillStyle(0x14110d, 0.6).fillRoundedRect(w / 2 - this.net.width / 2 - 10, 8, this.net.width + 20, 30, 8).lineStyle(1.5, 0xbfe0ff, 0.6).strokeRoundedRect(w / 2 - this.net.width / 2 - 10, 8, this.net.width + 20, 30, 8);
     if (S.paused) {
       g.fillStyle(0x000000, 0.5).fillRect(0, 0, w, h);
       this.big.setPosition(w / 2, h / 2).setText(`Пауза\n\n${S.touch ? "Коснись" : "Esc или клик"}, чтобы продолжить`).setFontSize(Math.min(34, w / 22)).setAlpha(1);
       // кнопки кооператива
-      if (NET.role === "solo") {
-        for (const [i, label] of ["Позвать друга (H)", "Войти по коду (J)"].entries()) {
+      if (NET.role !== "client") {
+        const labels = NET.role === "host" ? [`Копировать код ${NET.code}`, "Копировать ссылку"] : ["Позвать друга (H)", "Войти по коду (J)"];
+        for (const [i, label] of labels.entries()) {
           const bx = w / 2 + (i ? 120 : -120), by = h * 0.68;
           g.fillStyle(0x14110d, 0.85).fillRoundedRect(bx - 105, by, 210, 50, 10).lineStyle(2, 0xffe2a0, 0.7).strokeRoundedRect(bx - 105, by, 210, 50, 10);
           this.btn[i].setPosition(bx, by + 25).setText(label).setVisible(true);
