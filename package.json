@@ -1,0 +1,19 @@
+{
+  "name": "myzombika",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build && node -e \"require('fs').copyFileSync('dist/MyZombika.html','MyZombika.html')\"",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0",
+    "peerjs": "^1.5.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
