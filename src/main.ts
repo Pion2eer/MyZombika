@@ -2371,108 +2371,125 @@ class UI extends Phaser.Scene {
   }
 }
 
-const game = ((window as any).G = new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: "game",
-  backgroundColor: "#2a3020",
-  scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-  input: { activePointers: 4 },
-  render: { antialias: true },
-  scene: [Game, UI],
-}));
+// Запуск — только когда у окна есть размер. В скрытом/свёрнутом окне при холодной загрузке ширина и высота
+// бывают 0: WebGL не может создать буфер кадра («Framebuffer status: Incomplete Attachment») и остаётся чёрный экран.
+// Ждём, пока окно станет видимым и получит размер.
+let booted = false;
+const tryBoot = () => {
+  if (booted || document.hidden || innerWidth < 2 || innerHeight < 2) return;
+  booted = true;
+  removeEventListener("resize", tryBoot); document.removeEventListener("visibilitychange", tryBoot);
+  boot();
+};
+addEventListener("resize", tryBoot); document.addEventListener("visibilitychange", tryBoot);
+setTimeout(tryBoot, 0);
+// на всякий случай: окно так и не показали — через 3 с всё равно стартуем (мир идёт, звук и сеть живут)
+setTimeout(() => { if (!booted && innerWidth >= 2 && innerHeight >= 2) { booted = true; boot(); } }, 3000);
 
-// Фоновая вкладка: браузер останавливает requestAnimationFrame, и игра замирает. В кооперативе это ломает связь
-// (хозяин перестаёт рассылать мир, гость — свои движения), поэтому, пока вкладка скрыта, шагаем игру сами
-// по таймеру из воркера (таймеры воркера браузер почти не притормаживает).
-{
-  let last = performance.now();
-  const step = () => {
-    const now = performance.now();
-    if (!document.hidden || NET.role === "solo") { last = now; return; }
-    game.headlessStep(now, Math.min(100, now - last));
-    last = now;
-  };
-  try {
-    const w = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 50);"], { type: "text/javascript" })));
-    w.onmessage = step;
-  } catch {
-    setInterval(step, 50);
-  }
-}
+function boot() {
+  const game: Phaser.Game = ((window as any).G = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: "game",
+    backgroundColor: "#2a3020",
+    scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
+    input: { activePointers: 4 },
+    render: { antialias: true },
+    scene: [Game, UI],
+  }));
 
-// ───────── телефоны и планшеты: полный экран ─────────
-// Браузер даёт включить полный экран только по жесту пользователя — включаем на первое (и каждое следующее) касание,
-// пока игра не в полном экране. iPhone полноэкранный режим страницам не даёт: там — «На экран «Домой»» (манифест и
-// мета-теги apple-mobile-web-app-capable открывают игру без панелей браузера), подсказка показывается один раз.
-{
-  const ua = navigator.userAgent;
-  const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && matchMedia("(pointer: coarse)").matches);
-  const standalone = matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches || (navigator as any).standalone === true;
-  // горизонтальный режим: закрепляем ориентацию (Android — только в полном экране), а в вертикальном
-  // показываем «Поверни телефон» и ставим одиночную игру на паузу, пока телефон не повернут
-  const lockLand = () => { try { const o = (screen as any).orientation; o?.lock?.("landscape")?.catch?.(() => {}); } catch { /* не умеет */ } };
-  if (mobile) {
-    if (standalone) lockLand();
-    const ov = document.createElement("div");
-    ov.style.cssText = "position:fixed;inset:0;z-index:50;display:none;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#14110d;color:#ffe2a0;font:700 22px system-ui,sans-serif;text-align:center;padding:24px";
-    ov.innerHTML = '<svg width="96" height="96" viewBox="0 0 96 96" fill="none" stroke="#ffe2a0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="30" y="14" width="36" height="62" rx="7" style="transform-origin:48px 45px;animation:mzrot 2.4s ease-in-out infinite"/><path d="M14 66a36 36 0 0 0 26 22M82 30a36 36 0 0 0-26-22"/></svg><div></div>';
-    const st = document.createElement("style");
-    st.textContent = "@keyframes mzrot{0%,25%{transform:rotate(0)}55%,100%{transform:rotate(-90deg)}}";
-    document.head.appendChild(st);
-    for (const ev of ["pointerdown", "mousedown", "touchstart", "touchend", "click"]) ov.addEventListener(ev, (e) => e.stopPropagation());
-    let autoPaused = false;
-    const check = () => {
-      const port = innerHeight > innerWidth * 1.05;
-      if (!document.body.contains(ov)) document.body.appendChild(ov);
-      (ov.lastChild as HTMLElement).textContent = t("rotate");
-      ov.style.display = port ? "flex" : "none";
-      const g = game.scene.getScene("game") as any;
-      if (!g || !g.sys?.isActive()) return;
-      if (port && !S.paused && !S.over && !S.menu && NET.role === "solo") { g.togglePause(); autoPaused = true; }
-      else if (!port && autoPaused) { autoPaused = false; if (S.paused) g.togglePause(); }
+  // Фоновая вкладка: браузер останавливает requestAnimationFrame, и игра замирает. В кооперативе это ломает связь
+  // (хозяин перестаёт рассылать мир, гость — свои движения), поэтому, пока вкладка скрыта, шагаем игру сами
+  // по таймеру из воркера (таймеры воркера браузер почти не притормаживает).
+  {
+    let last = performance.now();
+    const step = () => {
+      const now = performance.now();
+      if (!document.hidden || NET.role === "solo") { last = now; return; }
+      game.headlessStep(now, Math.min(100, now - last));
+      last = now;
     };
-    addEventListener("resize", check); addEventListener("orientationchange", () => setTimeout(check, 200));
-    game.events.once("ready", check); setTimeout(check, 300);
-  }
-  if (mobile && !standalone) {
-    const d = document as any, el = document.documentElement as any;
-    const req: ((o?: object) => Promise<void> | void) | undefined = el.requestFullscreen ?? el.webkitRequestFullscreen;
-    let hinted = false;
-    const go = () => {
-      if (!settings.fs || d.fullscreenElement || d.webkitFullscreenElement) return;
-      if (req) {
-        try {
-          const r = req.call(el, { navigationUI: "hide" });
-          if (r && (r as Promise<void>).then) (r as Promise<void>).then(lockLand, () => {}); else lockLand();
-        } catch { /* не дали */ }
-      } else if (!hinted && /iPhone|iPod/i.test(ua)) {
-        hinted = true;
-        try { if (localStorage.getItem("myzombika-ios-hint")) return; localStorage.setItem("myzombika-ios-hint", "1"); } catch { /* нет хранилища */ }
-        S.msg = t("ios_hint"); S.msgT = 5;
-      }
-    };
-    // touchend и click — жесты, по которым браузер разрешает полный экран
-    window.addEventListener("touchend", go, { capture: true, passive: true });
-    window.addEventListener("click", go, true);
-  }
-  // манифест (установка на экран «Домой» — сразу на весь экран): адреса — от текущей страницы, значок — голова героя
-  const addManifest = () => {
     try {
-      const c = document.createElement("canvas"); c.width = c.height = 512;
-      const x = c.getContext("2d")!;
-      x.fillStyle = "#2a3020"; x.fillRect(0, 0, 512, 512);
-      const t = game.textures.get("hero_head"), f = t.get(8);
-      const src = f.source.image as CanvasImageSource, k = 300 / Math.max(f.cutWidth, f.cutHeight);
-      x.drawImage(src, f.cutX, f.cutY, f.cutWidth, f.cutHeight, 256 - (f.cutWidth * k) / 2, 270 - (f.cutHeight * k) / 2, f.cutWidth * k, f.cutHeight * k);
-      const icon = c.toDataURL("image/png");
-      const here = location.protocol.startsWith("http") ? location.origin + location.pathname : SITE;
-      const man = { name: "MyZombika", short_name: "MyZombika", start_url: here, scope: here.replace(/[^/]*$/, ""), display: "fullscreen", orientation: "landscape", background_color: "#1a1d14", theme_color: "#1a1d14",
-        icons: [{ src: icon, sizes: "512x512", type: "image/png" }, { src: icon, sizes: "192x192", type: "image/png" }] };
-      const link = document.createElement("link"); link.rel = "manifest";
-      link.href = "data:application/manifest+json;charset=utf-8," + encodeURIComponent(JSON.stringify(man));
-      document.head.appendChild(link);
-      const ap = document.createElement("link"); ap.rel = "apple-touch-icon"; ap.href = icon; document.head.appendChild(ap);
-    } catch { /* без значка */ }
-  };
-  game.events.once("ready", () => setTimeout(addManifest, 500));
+      const w = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 50);"], { type: "text/javascript" })));
+      w.onmessage = step;
+    } catch {
+      setInterval(step, 50);
+    }
+  }
+
+  // ───────── телефоны и планшеты: полный экран ─────────
+  // Браузер даёт включить полный экран только по жесту пользователя — включаем на первое (и каждое следующее) касание,
+  // пока игра не в полном экране. iPhone полноэкранный режим страницам не даёт: там — «На экран «Домой»» (манифест и
+  // мета-теги apple-mobile-web-app-capable открывают игру без панелей браузера), подсказка показывается один раз.
+  {
+    const ua = navigator.userAgent;
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && matchMedia("(pointer: coarse)").matches);
+    const standalone = matchMedia("(display-mode: fullscreen), (display-mode: standalone)").matches || (navigator as any).standalone === true;
+    // горизонтальный режим: закрепляем ориентацию (Android — только в полном экране), а в вертикальном
+    // показываем «Поверни телефон» и ставим одиночную игру на паузу, пока телефон не повернут
+    const lockLand = () => { try { const o = (screen as any).orientation; o?.lock?.("landscape")?.catch?.(() => {}); } catch { /* не умеет */ } };
+    if (mobile) {
+      if (standalone) lockLand();
+      const ov = document.createElement("div");
+      ov.style.cssText = "position:fixed;inset:0;z-index:50;display:none;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:#14110d;color:#ffe2a0;font:700 22px system-ui,sans-serif;text-align:center;padding:24px";
+      ov.innerHTML = '<svg width="96" height="96" viewBox="0 0 96 96" fill="none" stroke="#ffe2a0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="30" y="14" width="36" height="62" rx="7" style="transform-origin:48px 45px;animation:mzrot 2.4s ease-in-out infinite"/><path d="M14 66a36 36 0 0 0 26 22M82 30a36 36 0 0 0-26-22"/></svg><div></div>';
+      const st = document.createElement("style");
+      st.textContent = "@keyframes mzrot{0%,25%{transform:rotate(0)}55%,100%{transform:rotate(-90deg)}}";
+      document.head.appendChild(st);
+      for (const ev of ["pointerdown", "mousedown", "touchstart", "touchend", "click"]) ov.addEventListener(ev, (e) => e.stopPropagation());
+      let autoPaused = false;
+      const check = () => {
+        const port = innerHeight > innerWidth * 1.05;
+        if (!document.body.contains(ov)) document.body.appendChild(ov);
+        (ov.lastChild as HTMLElement).textContent = t("rotate");
+        ov.style.display = port ? "flex" : "none";
+        const g = game.scene.getScene("game") as any;
+        if (!g || !g.sys?.isActive()) return;
+        if (port && !S.paused && !S.over && !S.menu && NET.role === "solo") { g.togglePause(); autoPaused = true; }
+        else if (!port && autoPaused) { autoPaused = false; if (S.paused) g.togglePause(); }
+      };
+      addEventListener("resize", check); addEventListener("orientationchange", () => setTimeout(check, 200));
+      game.events.once("ready", check); setTimeout(check, 300);
+    }
+    if (mobile && !standalone) {
+      const d = document as any, el = document.documentElement as any;
+      const req: ((o?: object) => Promise<void> | void) | undefined = el.requestFullscreen ?? el.webkitRequestFullscreen;
+      let hinted = false;
+      const go = () => {
+        if (!settings.fs || d.fullscreenElement || d.webkitFullscreenElement) return;
+        if (req) {
+          try {
+            const r = req.call(el, { navigationUI: "hide" });
+            if (r && (r as Promise<void>).then) (r as Promise<void>).then(lockLand, () => {}); else lockLand();
+          } catch { /* не дали */ }
+        } else if (!hinted && /iPhone|iPod/i.test(ua)) {
+          hinted = true;
+          try { if (localStorage.getItem("myzombika-ios-hint")) return; localStorage.setItem("myzombika-ios-hint", "1"); } catch { /* нет хранилища */ }
+          S.msg = t("ios_hint"); S.msgT = 5;
+        }
+      };
+      // touchend и click — жесты, по которым браузер разрешает полный экран
+      window.addEventListener("touchend", go, { capture: true, passive: true });
+      window.addEventListener("click", go, true);
+    }
+    // манифест (установка на экран «Домой» — сразу на весь экран): адреса — от текущей страницы, значок — голова героя
+    const addManifest = () => {
+      try {
+        const c = document.createElement("canvas"); c.width = c.height = 512;
+        const x = c.getContext("2d")!;
+        x.fillStyle = "#2a3020"; x.fillRect(0, 0, 512, 512);
+        const t = game.textures.get("hero_head"), f = t.get(8);
+        const src = f.source.image as CanvasImageSource, k = 300 / Math.max(f.cutWidth, f.cutHeight);
+        x.drawImage(src, f.cutX, f.cutY, f.cutWidth, f.cutHeight, 256 - (f.cutWidth * k) / 2, 270 - (f.cutHeight * k) / 2, f.cutWidth * k, f.cutHeight * k);
+        const icon = c.toDataURL("image/png");
+        const here = location.protocol.startsWith("http") ? location.origin + location.pathname : SITE;
+        const man = { name: "MyZombika", short_name: "MyZombika", start_url: here, scope: here.replace(/[^/]*$/, ""), display: "fullscreen", orientation: "landscape", background_color: "#1a1d14", theme_color: "#1a1d14",
+          icons: [{ src: icon, sizes: "512x512", type: "image/png" }, { src: icon, sizes: "192x192", type: "image/png" }] };
+        const link = document.createElement("link"); link.rel = "manifest";
+        link.href = "data:application/manifest+json;charset=utf-8," + encodeURIComponent(JSON.stringify(man));
+        document.head.appendChild(link);
+        const ap = document.createElement("link"); ap.rel = "apple-touch-icon"; ap.href = icon; document.head.appendChild(ap);
+      } catch { /* без значка */ }
+    };
+    game.events.once("ready", () => setTimeout(addManifest, 500));
+  }
 }
