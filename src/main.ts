@@ -2489,6 +2489,74 @@ class UI extends Phaser.Scene {
   get gm() { return this.scene.get("game") as Game; }
   preload() { loadHudFiles(this); }
   vig!: Phaser.GameObjects.Image;
+  /** миникарта: круг под кнопками справа сверху; нажатие (или N) — крупнее. Перерисовка 10 раз в секунду */
+  mmG!: Phaser.GameObjects.Graphics; mmT = 0; mmBig = false; mmR = 0;
+  drawMini(w: number, h: number, dt: number, hits: Hit[]) {
+    const gm = this.gm, g = this.mmG;
+    if (S.over || S.inv || S.paused || !gm.px) { g.clear(); this.mmR = 0; return; }
+    const R = this.mmBig ? Math.round(Math.min(150, h * 0.34)) : S.touch || h < 500 ? 44 : 54;
+    const cx = w - 12 - R, cy = 64 + R;
+    hits.push({ x: cx - R, y: cy - R, w: R * 2, h: R * 2, fn: () => { this.mmBig = !this.mmBig; this.mmT = 0; } });
+    this.mmT -= dt;
+    if (this.mmT > 0 && R === this.mmR) return;
+    this.mmT = 0.1; this.mmR = R;
+    const range = this.mmBig ? 1100 : 650, k = R / range, px = gm.px, py = gm.py;
+    const inR = (x: number, y: number, pad = 2) => (x - cx) ** 2 + (y - cy) ** 2 < (R - pad) ** 2;
+    const P = (x: number, y: number) => ({ x: cx + (x - px) * k, y: cy + (y - py) * k });
+    g.clear().fillStyle(0x1a2214, 0.82).fillCircle(cx, cy, R);
+    // край мира
+    g.lineStyle(1.5, 0x2a4a20, 0.9);
+    for (const [ax, ay, bx, by] of [[0, 0, W, 0], [0, H, W, H], [0, 0, 0, H], [W, 0, W, H]]) {
+      const a = P(ax, ay), b = P(bx, by), n = 24;
+      for (let i = 0; i < n; i++) {
+        const x1 = a.x + (b.x - a.x) * (i / n), y1 = a.y + (b.y - a.y) * (i / n), x2 = a.x + (b.x - a.x) * ((i + 1) / n), y2 = a.y + (b.y - a.y) * ((i + 1) / n);
+        if (inR(x1, y1) && inR(x2, y2)) g.lineBetween(x1, y1, x2, y2);
+      }
+    }
+    // деревья, камни, предметы
+    for (const o of gm.obs) {
+      const q = P(o.x, o.y);
+      if (!inR(q.x, q.y, 3)) continue;
+      const kind = o.prop?.kind;
+      const col = kind === "barrel" ? 0xe04030 : kind === "drum" ? 0x4a7ad0 : kind === "crate" ? 0xc89a5a : kind === "car" ? 0x9a9a9a : kind === "fire" || kind === "lamp" ? 0xffd070 : kind ? 0x8a7a60 : o.canopy ? 0x3c6a2c : 0x7a7a84;
+      g.fillStyle(col, kind ? 0.95 : 0.75).fillCircle(q.x, q.y, Math.max(kind ? 1.6 : 1.3, Math.min(o.r * k, 6)));
+    }
+    // дом
+    g.fillStyle(0xa07a50, 0.95);
+    for (const wb of gm.walls) {
+      const pts = wb.pts.map((t) => P(t.x, t.y));
+      if (pts.every((t) => inR(t.x, t.y, 1))) g.fillPoints(pts, true);
+    }
+    // находки
+    for (const it of gm.items) {
+      const q = P(it.x, it.y);
+      if (!inR(q.x, q.y, 3)) continue;
+      g.fillStyle(it.kind === "medkit" ? 0xff6060 : it.kind === "armor" ? 0x80b0ff : 0x9aff60, 1).fillRect(q.x - 1.8, q.y - 1.8, 3.6, 3.6);
+    }
+    // враги: крупные — крупнее
+    for (const e of gm.enemies) {
+      if (e.dead) continue;
+      const q = P(e.x, e.y);
+      if (!inR(q.x, q.y, 2)) continue;
+      const big = e.kind === "bear" ? 3.6 : e.kind === "spitter" || e.kind === "panther" ? 2.4 : 1.8;
+      g.fillStyle(0xff3020, 1).fillCircle(q.x, q.y, big);
+    }
+    for (const m of gm.mates.values()) {
+      const q = P(m.x, m.y);
+      if (!inR(q.x, q.y, 3)) { // напарник далеко — стрелка на краю
+        const a = Math.atan2(m.y - py, m.x - px);
+        g.fillStyle(0x6ab0ff, 1).fillCircle(cx + Math.cos(a) * (R - 5), cy + Math.sin(a) * (R - 5), 2.6);
+        continue;
+      }
+      g.fillStyle(m.dead ? 0x50607a : 0x6ab0ff, 1).fillCircle(q.x, q.y, 2.8);
+    }
+    // герой: стрелка по прицелу
+    const a = gm.aimA, ar = this.mmBig ? 7 : 5.5;
+    g.fillStyle(0xffe2a0, 1).lineStyle(1.5, 0x14110d, 1);
+    const tri = [{ x: cx + Math.cos(a) * ar, y: cy + Math.sin(a) * ar }, { x: cx + Math.cos(a + 2.5) * ar * 0.8, y: cy + Math.sin(a + 2.5) * ar * 0.8 }, { x: cx + Math.cos(a - 2.5) * ar * 0.8, y: cy + Math.sin(a - 2.5) * ar * 0.8 }];
+    g.fillPoints(tri, true).strokePoints(tri, true);
+    g.lineStyle(2, 0xffe2a0, 0.55).strokeCircle(cx, cy, R).lineStyle(1, 0x14110d, 0.9).strokeCircle(cx, cy, R + 1.5);
+  }
   /** дождь (каждая третья волна, начиная со второй): капли, брызги, пасмурно, ночью молнии */
   rainG!: Phaser.GameObjects.Graphics; rain = 0; boltT = 6; bolt = 0;
   drops: { x: number; y: number; l: number; end: number }[] = [];
@@ -2584,7 +2652,7 @@ class UI extends Phaser.Scene {
   drawTop(g: Phaser.GameObjects.Graphics, w: number, h: number) {
     const g2 = this.g2, sc = w < 700 || h < 450 ? 0.8 : 0.92, x = 10;
     // всё в одну строку; если не влезает (узкий экран) — патроны и предметы переносятся во вторую
-    const right = w - (S.touch ? 70 : 120); // справа кнопки паузы/рюкзака
+    const right = w - Math.max(S.touch ? 70 : 120, this.mmR * 2 + 24); // справа кнопки паузы/рюкзака и миникарта
     let y = 10 + 16 * sc;
     const pillBg = (x0: number, pw: number, cy: number) => g.fillStyle(0x14110d, 0.6).fillRoundedRect(x0, cy - 14 * sc, pw, 28 * sc, 14 * sc).lineStyle(1.2, 0xffe2a0, 0.22).strokeRoundedRect(x0, cy - 14 * sc, pw, 28 * sc, 14 * sc);
     // блок жизни: сердце слева, полоска жизни, под ней — всегда полоска брони (пустая или полная)
@@ -2648,6 +2716,8 @@ class UI extends Phaser.Scene {
       this.textures.addCanvas("vignette", cv);
     }
     this.rainG = this.add.graphics().setDepth(-2);
+    this.mmG = this.add.graphics().setDepth(0.45);
+    this.input.keyboard?.on("keydown-N", () => { this.mmBig = !this.mmBig; this.mmT = 0; });
     this.vig = this.add.image(0, 0, "vignette").setOrigin(0).setDepth(-1).setAlpha(0);
     this.g = this.add.graphics();
     this.g2 = this.add.graphics().setDepth(0.45);
@@ -2739,6 +2809,7 @@ class UI extends Phaser.Scene {
       for (const o of [this.bannerT, this.info, this.big, this.help, this.net, this.chatT, this.bagT, ...this.btn, ...this.slotT, ...this.invT]) o.setVisible(false);
       this.doll.c.setVisible(false);
       S.hits = [];
+      this.mmG.clear(); this.mmR = 0;
       this.rain = 0; this.drawRain(w, h, dt);
       return;
     }
@@ -2810,7 +2881,7 @@ class UI extends Phaser.Scene {
     } else if (S.over) {
       this.big.setAlpha(0); // итоги — на экране смерти (menu.ts)
     } else {
-      const wv = this.bT < 2.6 && S.msg === t("wave_n", { n: S.wave });
+      const wv = S.msg === t("wave_n", { n: S.wave }); // номер волны показывает заставка
       this.big.setPosition(w / 2, h * 0.28).setText(S.msg).setFontSize(42).setAlpha(wv ? 0 : Phaser.Math.Clamp(S.msgT, 0, 1));
     }
     this.drawBanner(g, w, h, dt);
@@ -2855,6 +2926,7 @@ class UI extends Phaser.Scene {
         hits.push({ x: hx - 28, y: hy - 28, w: 56, h: 56, fn: () => gm.useMedkit() });
       }
     }
+    this.drawMini(w, h, dt, hits);
     // горячие точки (в окне снаряжения — только его кнопки и «мимо окна»)
     S.hits = S.paused || S.over ? [] : hits;
   }
