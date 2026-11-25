@@ -65,11 +65,74 @@ class Model {
   }
 }
 
+/** машина: нос в +x. Кузов, кабина со стёклами, колёса, фары; ржавчина пятнами; burnt — обгоревший остов без стёкол */
+function car(nx: number, ny: number, paint: number, o: { burnt?: boolean; police?: boolean; van?: boolean; bus?: boolean } = {}) {
+  const nz = o.bus ? 26 : o.van ? 24 : 18;
+  const m = new Model(nx, ny, nz);
+  const L = nx - 4, Wd = ny - 6, x0 = 2, y0 = 3;
+  const body = o.burnt ? 0x3a302a : paint, glass = 0x2a3a48, glassL = 0x6a8aa0;
+  const rust = (x: number, y: number, z: number, c: number) => (o.burnt ? (hash(x >> 2, y >> 2, z >> 2) < 0.35 ? (hash(x, y, z) < 0.5 ? 0x9a5426 : 0x7a3e1c) : hash(x, y, z) < 0.22 ? 0x1a1816 : hash(x >> 1, y >> 1, 3) < 0.15 ? 0x8a8680 : 0x55504c) : hash(x, y, z) < 0.05 ? 0x8a4a22 : hash(x >> 1, y >> 1, 0) < 0.04 ? 0x6a3a1e : c);
+  const capZ0 = 9, capZ1 = o.bus || o.van ? nz - 2 : 16;
+  const cab0 = o.bus || o.van ? x0 + 3 : x0 + Math.round(L * 0.3), cab1 = o.bus || o.van ? x0 + L - 6 : x0 + Math.round(L * 0.72);
+  const tall = !!(o.bus || o.van);
+  m.each((u, v, z, x, y) => {
+    const lx = x - x0, ly = y - y0;
+    if (lx < 0 || ly < 0 || lx >= L || ly >= Wd) return;
+    // скруглённые углы кузова
+    const cx = Math.min(lx, L - 1 - lx), cy = Math.min(ly, Wd - 1 - ly);
+    if (cx + cy < 3) return;
+    if (z >= 2 && z < capZ0) {
+      // фары и фонари
+      if (z >= 5 && z <= 6 && cy < 4 && lx >= L - 1) return o.burnt ? 0x2a2420 : 0xfff0b0;
+      if (z >= 5 && z <= 6 && cy < 4 && lx === 0) return o.burnt ? 0x2a2420 : 0xd02020;
+      if (z === 2) return 0x1e1c1a; // низ кузова, тёмный
+      if (o.police) return z < 6 ? 0x1a1a1c : rust(x, y, z, WHITE);
+      if (o.bus && z === 5) return 0x1a1a1c;
+      // шов капота
+      if (z === capZ0 - 1 && !tall && (lx === cab0 - x0 - 6 || lx === cab1 - x0 + 4)) return shade(body, 0.7);
+      return rust(x, y, z, body);
+    }
+    // кабина: у легковой — уже кузова и со скошенными стёклами спереди и сзади
+    const k = z - capZ0, slope = tall ? 0 : k * 1.2;
+    const c0 = cab0 - x0 + slope, c1 = cab1 - x0 - slope * 0.7, inset = tall ? 1 : 3;
+    if (z >= capZ0 && z < capZ1 && lx >= c0 && lx < c1 && cy >= inset) {
+      const roof = z === capZ1 - 1;
+      const edgeX = lx < c0 + (tall ? 1 : 1.3) || lx >= c1 - (tall ? 1 : 1.3), edgeY = cy === inset;
+      if (roof) {
+        if (o.police && Math.abs(lx - (c0 + c1) / 2) < 2 && cy > Wd / 2 - 6) return ly < Wd / 2 ? 0xe02020 : 0x2040e0;
+        return rust(x, y, z, o.police ? 0x1a1a1c : shade(body, 1.04));
+      }
+      if (edgeX || edgeY) {
+        const pillar = tall ? (edgeY && lx % 7 === 0) || (edgeX && cy < inset + 2) : edgeY && Math.abs(lx - (c0 + c1) / 2) < 1;
+        if (pillar || z === capZ0) return rust(x, y, z, o.police ? 0x1a1a1c : body);
+        if (o.burnt) return -1;
+        return hash(x, y, z) < 0.15 ? glassL : glass;
+      }
+      return o.burnt ? -1 : 0x2a2420; // салон
+    }
+    return undefined;
+  });
+  // колёса: цилиндры поперёк (ось по y)
+  const wr = o.bus ? 5 : 4, wx = [x0 + 9, x0 + L - 10];
+  for (const cxw of wx) for (const yy of [y0 - 1, y0, y0 + Wd - 1, y0 + Wd]) for (let x = cxw - wr - 1; x <= cxw + wr + 1; x++) for (let z = 0; z <= wr * 2; z++) {
+    const d = Math.hypot(x + 0.5 - cxw, z + 0.5 - wr);
+    if (d < wr) m.set(x, yy, z, d < wr * 0.45 ? (o.burnt ? 0x3a3430 : IRON_L) : o.burnt ? 0x4a3a30 : BLACK);
+  }
+  return m;
+}
+
 // ───────── модели ─────────
 const STRAW = 0xd8b050, STRAW_D = 0xa8822c, WOOD = 0x9a6a38, WOOD_D = 0x6a4420, STONE = 0x9a968c, STONE_D = 0x6e6a62, IRON = 0x5a5a58, IRON_L = 0x8a8a86;
 const RED = 0xc83828, ORANGE = 0xf08a20, WHITE = 0xeeeae0, GREEN = 0x4a7a34, OLIVE = 0x5e6e2c, BLUE = 0x3a6ab8, YEL = 0xf0c030, BLACK = 0x2a2824;
 
 const MODELS: Record<string, () => Model> = {
+  // ── машины ──
+  car_red: () => car(64, 30, 0xb83a2a),
+  car_teal: () => car(58, 28, 0x3a8a8a),
+  car_burnt: () => car(62, 30, 0x3a302a, { burnt: true }),
+  car_police: () => car(64, 30, WHITE, { police: true }),
+  van: () => car(70, 32, 0xd8d0b8, { van: true }),
+  bus: () => car(120, 36, YEL, { bus: true }),
   // ── глава 1: лес и ферма ──
   hay_round: () => new Model(20, 20, 18).hcyl(2, 18, 10, 8.5, 8.5, (d, x) => (x === 6 || x === 13 ? 0x8a6a30 : d > 7.5 ? STRAW_D : STRAW), 0.22),
   hay_block: () => {
@@ -182,6 +245,7 @@ const MODELS: Record<string, () => Model> = {
 export const SLICE_PROPS = Object.keys(MODELS);
 /** размер в мире (шаг вокселя 1 px): радиус для столкновений и «низкий» ли предмет (через него летят пули) */
 export const SLICE_INFO: Record<string, { r: number; low?: boolean }> = {
+  car_red: { r: 14 }, car_teal: { r: 13 }, car_burnt: { r: 14 }, car_police: { r: 14 }, van: { r: 15 }, bus: { r: 17 },
   hay_round: { r: 10 }, hay_block: { r: 11 }, well: { r: 12 }, cart: { r: 13 }, stump: { r: 7, low: true }, pumpkins: { r: 9, low: true }, scarecrow: { r: 5 }, logs: { r: 12 }, gravestone: { r: 6 },
   cone: { r: 5, low: true }, barrier: { r: 12 }, fuel_pump: { r: 8 }, sign_post: { r: 4 },
   hydrant: { r: 5, low: true }, bench: { r: 11, low: true }, trash_bin: { r: 6 }, traffic_light: { r: 5 }, mailbox: { r: 5 },

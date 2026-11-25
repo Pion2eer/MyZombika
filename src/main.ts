@@ -1184,10 +1184,14 @@ class Game extends Phaser.Scene {
     for (let n = 0, tries = 0; n < 8 && tries < 400; tries++) {
       const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200);
       if (!free(x, y, 62)) continue;
-      const a = rnd.realInRange(0, TAU), art = rnd.pick(["car_red", "car_teal", "car_burnt", "car_burnt"] as PropArt[]);
-      const im = this.add.image(x, y, "prop_" + art).setDisplaySize(112, 54).setRotation(a).setDepth(y - 10);
+      // машина — модель из срезов (как герой); поворот кратен 45°, по нему и коробка-препятствие
+      const th = S.story ? CHAPTERS[CH].theme : "farm";
+      const pool = th === "road" ? ["car_red", "car_teal", "car_burnt", "car_police", "van", "bus", "car_burnt"] : th === "town" ? ["car_red", "car_teal", "car_police", "van", "car_burnt"] : ["car_red", "car_teal", "car_burnt", "car_burnt", "van"];
+      const name = rnd.pick(pool), f = rnd.between(0, 7), a = (f / 8) * TAU, o = SV[name];
+      const im = this.add.image(x, y, "sv_" + name, f).setDisplaySize(o.w * SV_SCALE, o.h * SV_SCALE).setOrigin(o.x, o.y).setDepth(y);
       const p = add("car", x, y, 999, im);
-      p.wall = box(x, y, 52, 22, a, 22);
+      const [ex, ey] = { bus: [94, 24], van: [52, 22], car_teal: [43, 18] }[name] ?? [48, 20];
+      p.wall = box(x, y, ex, ey, a, name === "bus" || name === "van" ? 34 : 24);
       this.walls.push(p.wall);
       // рядом — бочки и покрышки
       const c = Math.cos(a), s = Math.sin(a);
