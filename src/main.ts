@@ -1259,6 +1259,8 @@ class Game extends Phaser.Scene {
     // время суток из настроек (у гостя — как у хозяина)
     if (NET.role !== "client" && settings.daynight !== "cycle") L.t = Math.floor(L.t) + (settings.daynight === "day" ? 0.25 : 0.72);
     L.shadows = settings.quality !== "low";
+    L.setRes(settings.quality === "high" ? 1 : 2);
+
     this.propLights();
     L.update(dt, this.px, this.py, this.aimA, alive && this.muzzleT > 0 ? 1 : 0, { x: this.px + ca * 30, y: this.py + sa * 30 + gunZ }, alive ? occ : []);
     S.daytime = L.label();
@@ -1289,8 +1291,10 @@ class Game extends Phaser.Scene {
     };
     // вспышка выстрела ночью: тень героя падает назад, от дула (днём солнце сильнее вспышки)
     const flashSh = alive && this.muzzleT > 0 && night > 0.4;
-    rt.beginDraw(); // все силуэты одним проходом в текстуру
     if (settings.quality === "low" || (shA < 0.05 && !flashSh)) shA = 0; // низкое качество (или ночь): без длинных теней людей и зверей
+    // ночью этот слой пуст — не открываем проход вовсе (на телефоне каждый проход дорогой)
+    if (shA > 0.01) rt.beginDraw(); // все силуэты одним проходом в текстуру
+    if (shA <= 0.01) { /* пусто */ }
     else if (flashSh) {
       shA = 0.25 + night * 0.4;
       humPoint(this.player, this.px, this.py, this.aimA + Math.PI, 1.6 + night);
@@ -1308,7 +1312,7 @@ class Game extends Phaser.Scene {
         }
       }
     }
-    rt.endDraw();
+    if (shA > 0.01) rt.endDraw();
     // тени стен дома от солнца: прямоугольник + он же, сдвинутый по солнцу на высоту стены
     if (settings.quality !== "low" && !flashSh && SHADOW_ALPHA * sun.day > 0.01 && this.walls.length) {
       const g = (this.wallShG ??= this.make.graphics({}, false)).clear().fillStyle(0x000000);

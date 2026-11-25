@@ -115,8 +115,13 @@ export class Lighting {
   /** яркость луча фонаря (0..1) */
   BEAM = 0.55;
   CONE = 430;
+  /** яркость костров, фонарей и вспышек относительно фонарика */
+  EXTRA = 0.6;
   /** тени от фонаря (на низком качестве выключены) */
   shadows = true;
+  /** во сколько раз карта света меньше экрана (свет мягкий — на телефоне хватает половины) */
+  private ls = 1;
+  setRes(n: number) { if (n !== this.ls) { this.ls = n; this.makeRT(); } }
 
   constructor(private scene: Phaser.Scene, startT: number) {
     this.t = startT;
@@ -194,7 +199,9 @@ export class Lighting {
     this.shad?.destroy();
     this.dark = this.scene.add.renderTexture(0, 0, w, h).setOrigin(0).setDepth(1e6 + 0.5);
 
-    this.light = this.scene.make.renderTexture({ x: 0, y: 0, width: w, height: h }, false).setOrigin(0);
+    const ls = this.fx ? this.ls : 1;
+    this.light = this.scene.make.renderTexture({ x: 0, y: 0, width: Math.ceil(w / ls), height: Math.ceil(h / ls) }, false).setOrigin(0).setScale(ls);
+    this.light.camera.setOrigin(0, 0).setZoom(1 / ls);
     this.shad = this.scene.make.renderTexture({ x: 0, y: 0, width: Math.ceil(w / SH), height: Math.ceil(h / SH) }, false).setOrigin(0).setScale(SH);
     // сглаживание при растягивании (иначе края тени — лесенкой из крупных пикселей)
     this.shad.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -202,7 +209,8 @@ export class Lighting {
       // карта света — ровно по видимой части мира, чтобы её пиксели совпадали с экраном
       const cam = this.scene.cameras.main;
       this.lmap?.destroy();
-      this.lmap = this.scene.make.renderTexture({ x: 0, y: 0, width: Math.ceil(this.scene.scale.width / cam.zoom), height: Math.ceil(this.scene.scale.height / cam.zoom) }, false).setOrigin(0);
+      this.lmap = this.scene.make.renderTexture({ x: 0, y: 0, width: Math.ceil(this.scene.scale.width / cam.zoom / ls), height: Math.ceil(this.scene.scale.height / cam.zoom / ls) }, false).setOrigin(0);
+      this.lmap.camera.setOrigin(0, 0).setZoom(1 / ls);
       this.dark.setVisible(false);
     }
   }
@@ -374,6 +382,9 @@ export class Lighting {
       }
     }
     const S = this.shad.clear().draw(g);
+    // все освещённые предметы стираются из тени одним проходом (раньше — по проходу на предмет:
+    // на телефоне каждый проход RenderTexture — это очистка и копия на весь экран, ночью FPS падал в разы)
+    S.beginDraw();
     // предмет сам освещён: вырезаем его из тени. Вблизи (и при полной подробности) — точный силуэт,
     // остальное — мягкий круг; круги вырезаются все разом одним проходом
     const dots: Phaser.GameObjects.Image[] = [];
@@ -394,50 +405,63 @@ export class Lighting {
         const w = ob instanceof Phaser.GameObjects.Image ? ob.displayWidth : 30;
         const shrink = Math.max(0.6, 1 - (SH * 2.4) / Math.max(20, w));
         ob.setScale((sx * shrink) / SH, (sy * shrink) / SH);
-        S.erase(ob, (ob.x - ox) / SH, (ob.y - oy) / SH);
+        S.batchDraw(ob, (ob.x - ox) / SH, (ob.y - oy) / SH);
         ob.setScale(sx, sy);
         if (o.hide) o.hide.visible = !!hv;
       }
     }
-    if (dots.length) S.erase(dots);
+    for (const d of dots) S.batchDraw(d);
+    S.endDraw(true);
     return S;
   }
 
   /** WebGL: цветная карта света → шейдер умножает на неё картинку */
+  /** чистое сложение света (ONE, ONE): встроенный ADD в Phaser — (ONE, DST_ALPHA), он гасит уже нарисованное */
+  private plus = -1;
   private shaderLight(px: number, py: number, aim: number, flash: number, muzzle: { x: number; y: number }, occ: Circle[]) {
     const { day, warm } = this.sun, night = 1 - day;
     // карта света должна совпадать с видимой частью мира. При повороте телефона / входе в полный экран
     // размер окна и зум камеры меняются в разных обработчиках, и карта могла остаться от старого зума —
     // тогда свет «съезжал» от героя. Сверяем каждый кадр и пересоздаём при расхождении.
     const cam = this.scene.cameras.main;
-    const needW = Math.ceil(this.scene.scale.width / cam.zoom), needH = Math.ceil(this.scene.scale.height / cam.zoom);
+    const ls = this.ls, needW = Math.ceil(this.scene.scale.width / cam.zoom / ls), needH = Math.ceil(this.scene.scale.height / cam.zoom / ls);
     if (!this.lmap || Math.abs(this.lmap.width - needW) > 2 || Math.abs(this.lmap.height - needH) > 2 || this.light.width < needW || this.light.height < needH) this.makeRT();
     const v = cam.worldView, M = this.lmap!;
     const ox = v.x, oy = v.y;
+    const r = this.scene.game.renderer as Phaser.Renderer.WebGL.WebGLRenderer;
+    if (this.plus < 0) this.plus = r.addBlendMode([r.gl.ONE, r.gl.ONE], r.gl.FUNC_ADD);
+    const PLUS = this.plus;
     // окружающий свет: день — нейтральный (0.5 = без изменений), закат — тёплый, ночь — тёмно-синяя луна
     const mix = (a: number[], b: number[], t: number) => a.map((x, i) => x + (b[i] - x) * t);
     let amb = mix([20, 26, 50], [128, 128, 128], day);
     amb = mix(amb, [150, 112, 86], warm * 0.75);
     M.clear().fill(Phaser.Display.Color.GetColor(amb[0], amb[1], amb[2]), 1);
-    // свет фонаря (с тенями) — только когда темнеет
-    const L = this.light.clear();
     const lx = px - ox, ly = py - oy, k = Math.max(night, 0);
-    if (k > 0.02) {
-      L.draw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setTint(0xe08a3c).setAlpha(this.LAMP * k).setBlendMode(Phaser.BlendModes.ADD));
-      L.draw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setTint(0xfff2dc).setAlpha(this.BEAM * k).setBlendMode(Phaser.BlendModes.ADD));
-      if (this.shadows) L.erase(this.shadowMask(lx, ly, px, py, ox, oy, occ, aim));
-    }
-    // костры, фонари, взрывы (без теней)
-    for (const e of this.extra) {
-      if (e.a < 0.01 || e.x + e.r < ox || e.y + e.r < oy || e.x - e.r > ox + M.width || e.y - e.r > oy + M.height) continue;
-      L.draw(this.lampImg.setPosition(e.x - ox, e.y - oy).setDisplaySize(e.r * 2, e.r * 2).setTint(e.col).setAlpha(Math.min(1, e.a)).setBlendMode(Phaser.BlendModes.ADD));
-    }
-    // вспышка выстрела — тёплая, у дула
-    if (flash > 0) L.draw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.6, this.R * 1.6).setTint(0xffb050).setAlpha(flash * (0.25 + 0.5 * night)).setBlendMode(Phaser.BlendModes.ADD));
-    M.draw(this.light.setBlendMode(Phaser.BlendModes.ADD), 0, 0);
-    // глаза зомби светятся сами
+    const lit = this.extra.filter((e) => !(e.a < 0.01 || e.x + e.r < ox || e.y + e.r < oy || e.x - e.r > ox + M.width * ls || e.y - e.r > oy + M.height * ls));
+    const glow = night > 0.1 ? this.emissive : [];
+    // Весь свет кадра — одним проходом в каждую текстуру. Раньше каждый источник был отдельным draw у RenderTexture,
+    // а это в Phaser целый проход (свой буфер, очистка и копия на весь экран): на телефоне ночью FPS падал в разы.
+    if (k > 0.02 || lit.length || flash > 0) {
+      const mask = k > 0.02 && this.shadows ? this.shadowMask(lx, ly, px, py, ox, oy, occ, aim) : null;
+      const L = this.light.clear();
+      L.beginDraw();
+      if (k > 0.02) {
+        L.batchDraw(this.lampImg.setPosition(lx, ly).setDisplaySize(this.R * 2, this.R * 2).setTint(0xe08a3c).setAlpha(this.LAMP * k * 0.45).setBlendMode(PLUS));
+        L.batchDraw(this.coneImg.setPosition(lx, ly).setRotation(aim).setDisplaySize(this.CONE, this.CONE).setTint(0xfff2dc).setAlpha(this.BEAM * k).setBlendMode(PLUS));
+        // тени от фонаря стираем только из его света (костры и фонари ниже — без теней)
+        if (mask) { const b = mask.blendMode; mask.setBlendMode(Phaser.BlendModes.ERASE); L.batchDraw(mask, 0, 0); mask.setBlendMode(b); }
+      }
+      for (const e of lit) L.batchDraw(this.lampImg.setPosition(e.x - ox, e.y - oy).setDisplaySize(e.r * 2, e.r * 2).setTint(e.col).setAlpha(Math.min(1, e.a) * this.EXTRA).setBlendMode(PLUS));
+      // вспышка выстрела — тёплая, у дула
+      if (flash > 0) L.batchDraw(this.flashImg.setPosition(muzzle.x - ox, muzzle.y - oy).setDisplaySize(this.R * 1.6, this.R * 1.6).setTint(0xffb050).setAlpha(flash * (0.25 + 0.5 * night) * this.EXTRA).setBlendMode(PLUS));
+      r.setBlendMode(PLUS);
+      L.endDraw();
+      M.beginDraw();
+      M.batchDraw(this.light.setBlendMode(PLUS), 0, 0);
+    } else if (glow.length) M.beginDraw();
     // светящееся само (глаза, трассеры, прицел) рисуется в карту света
-    if (night > 0.1) for (const e of this.emissive) { const b = e.blendMode; M.draw(e.setBlendMode(Phaser.BlendModes.ADD), -ox, -oy); e.setBlendMode(b); }
+    for (const e of glow) { const b = e.blendMode; M.batchDraw(e.setBlendMode(PLUS), -ox, -oy); e.setBlendMode(b); }
+    if ((M.texture as Phaser.Textures.DynamicTexture).isDrawing) { r.setBlendMode(PLUS); M.endDraw(); }
     this.fx!.night = night;
     this.fx!.lightTex = (M.texture.source[0] as unknown as { glTexture: Phaser.Renderer.WebGL.Wrappers.WebGLTextureWrapper }).glTexture;
   }
