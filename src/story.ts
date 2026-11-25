@@ -38,6 +38,8 @@ export const WEAPON_CRATES = [{ x: 1180, y: STORY_H - 1500, slot: 1 }];
 export interface StorySave {
   ch: number; camp: number; hp: number; armor: number; medkits: number; grenades: number;
   owned: boolean[]; clip: Record<string, number>; weapon: number; kills: number; score: number; time: number;
+  /** прокачка (с 0.12) */
+  level?: number; xp?: number; parts?: number; up?: Record<string, number>;
 }
 const KEY = "myzombika-story";
 export function loadStory(): StorySave | null {
