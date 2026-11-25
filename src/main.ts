@@ -9,7 +9,9 @@ import { t, type Key } from "./i18n";
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
-import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
+import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
+import { makeSliceProps, SLICE_INFO } from "./propVox";
+import { loadGroundFiles, makeGround } from "./groundArt";
 import { HUD_ART, HUD_FILE, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
@@ -27,6 +29,8 @@ function storyFree(x: number, y: number, r: number) {
 }
 /** режим: волны или сюжет (выбирается в меню, мир строится заново) */
 let MODE: "waves" | "story" = "waves";
+/** сюжет: какая глава идёт (0..4) — у хозяина из сохранения, у гостя из «hi» хозяина */
+let storyCh = 0;
 const VOX = 1.0, K = 3, DZ = 0.8, FRAMES = 64; // воксель = 1 px мира; атлас 64 поворота
 const lift = (z: number) => -z * DZ * VOX;
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -55,6 +59,8 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   pistol: { id: "pistol", name: "Пистолет", short: "Пистолет", mag: 12, rate: 0.25, reload: 0.9, pellets: 1, spread: 0.03, life: 0.5, dmg: 1.5, kb: 110, sound: "pistol", shake: 0.0005 },
   grenade: { id: "grenade", name: "Гранаты", short: "Гранаты", mag: 0, rate: 0.8, reload: 0, pellets: 0, spread: 0, life: 0, dmg: 0, kb: 0, sound: "shot", shake: 0 },
 };
+/** название текущей главы */
+const chTitle = () => t(`st_ch${CH + 1}` as Key);
 /** название оружия на текущем языке */
 export const wname = (id: WeaponId) => t(`w_${id}` as Key);
 /** ячейки 1–4 */
@@ -349,7 +355,7 @@ const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; s
 };
 interface Enemy {
   kind: Kind; x: number; y: number; kx: number; ky: number; hp: number; a: number; ph: number; cool: number; hitT: number;
-  /** сюжет: с какого участка (-1 — бродячий) */ seg?: number;
+  /** сюжет: с какого участка (-1 — бродячий); финальный босс */ seg?: number; boss?: boolean;
   hum?: Humanoid; img?: Phaser.GameObjects.Image; c: Phaser.GameObjects.Container; dead: boolean;
   /** через сколько секунд подать голос */
   voice: number;
@@ -384,7 +390,7 @@ interface Gib {
 const MEAT = [0x6a1a14, 0x8a2a20, 0x4a0e0a, 0xa0443a];
 const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan" };
 interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number; /** предмет (бочка, ящик…) */ prop?: Prop; /** стоит «вертикально» (тень как у дерева) */ upright?: boolean; /** низкий — пули летят над ним */ low?: boolean }
-type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires";
+type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires" | "deco";
 /** предмет на карте. Разрушаемые: бочка (взрывается), ящик (ломается, иногда с находкой) */
 interface Prop { id: number; kind: PropKind; x: number; y: number; hp: number; img: Phaser.GameObjects.Image; ob?: Ob; wall?: WallBox; dead: boolean;
   /** сюжет: в ящике оружие (номер ячейки) */ loot?: number; star?: Phaser.GameObjects.Image;
@@ -438,6 +444,9 @@ function copyInvite(what: "code" | "link") {
 }
 /** у гостя: где хозяин поставил героя (запоминаем — сцена могла перезапуститься) */
 let pendingHi: Record<string, any> | null = null;
+/** предметы из срезов: точка опоры и размер в мире */
+let SV: ReturnType<typeof makeSliceProps> = {};
+const SV_SCALE = 1.6;
 /** гость в сюжете: по какому «hi» хозяина уже перезапущен мир (новый «hi» — хозяин начал заново с лагеря) */
 let syncedHi: Record<string, any> | null = null;
 
@@ -484,6 +493,18 @@ class Game extends Phaser.Scene {
   props: Prop[] = [];
   /** сюжет: заслоны, лагеря, проснувшиеся группы */
   gates: { y: number; open: boolean; walls: WallBox[]; imgs: Phaser.GameObjects.GameObject[]; seg: number }[] = [];
+  deco?: (name: string, x: number, y: number, rot?: number) => void;
+  /** какие предметы из срезов ставить (тема места) */
+  decoSet(): string[] {
+    const th = S.story ? CHAPTERS[CH].theme : "farm";
+    return {
+      farm: ["hay_round", "hay_block", "well", "cart", "stump", "pumpkins", "scarecrow", "logs", "gravestone", "hay_round", "logs"],
+      road: ["cone", "cone", "barrier", "barrier", "fuel_pump", "sign_post", "sign_post", "logs", "stump", "trash_bin"],
+      town: ["hydrant", "bench", "trash_bin", "traffic_light", "mailbox", "bench", "hydrant", "cone", "sign_post", "trash_bin"],
+      factory: ["pallet", "pallet", "gas_cyl", "toolbox", "valve", "valve", "barrier", "cone", "trash_bin", "ammo_crate"],
+      dam: ["sandbags", "sandbags", "ammo_crate", "searchlight", "rock_moss", "rock_moss", "barrier", "gas_cyl", "sign_post"],
+    }[th];
+  }
   seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
   burns: Burn[] = [];
   lookX = 0; lookY = 0; beatT = 0; ambT = 4;
@@ -493,9 +514,11 @@ class Game extends Phaser.Scene {
     // картинки встроены прямо в сборку (data URI) — игра открывается двойным кликом по html без сервера
     for (const [path, url] of Object.entries(SPRITES)) this.load.image(path.split("/").pop()!.replace(".png", ""), url);
     loadPropFiles(this);
+    loadGroundFiles(this);
   }
 
   create() {
+    if (MODE === "story") setChapter(storyCh);
     [W, H] = MODE === "story" ? [STORY_W, STORY_H] : [3000, 3000];
     this.gn = Math.ceil(Math.max(W, H) / Game.CELL);
     this.blocked = new Uint8Array(this.gn * this.gn); this.dist = new Float32Array(this.gn * this.gn);
@@ -505,6 +528,8 @@ class Game extends Phaser.Scene {
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.props = []; this.burns = [];
     makePropArt(this);
+    SV = makeSliceProps(this);
+    makeGround(this);
     this.enemies = []; this.obs = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
     makeStack(this, "hero_head", PAL_HERO, "head");
@@ -748,6 +773,7 @@ class Game extends Phaser.Scene {
   /** из меню: новая игра или продолжение с последнего лагеря */
   startStory(fresh: boolean) {
     if (fresh) saveStory(null);
+    storyCh = fresh ? 0 : Math.max(0, (loadStory()?.ch ?? 1) - 1);
     MODE = "story";
     menuOnStart = false;
     closeMenu();
@@ -770,7 +796,7 @@ class Game extends Phaser.Scene {
       S.maxHp = heroMaxHp(); S.hp = S.maxHp; S.clip = fullClips();
       return;
     }
-    const sv = loadStory();
+    const sv0 = loadStory(), sv = sv0 && sv0.ch - 1 === CH ? sv0 : null;
     const camp = sv ? Math.min(sv.camp, CAMPS.length) : 0;
     this.seg = camp; this.storyEnd = false; this.strT = 8; this.gateMsgT = 0;
     this.woke = GROUPS.map((g) => g.seg < camp);
@@ -788,10 +814,10 @@ class Game extends Phaser.Scene {
     const at = camp > 0 ? { x: CAMPS[camp - 1].x, y: CAMPS[camp - 1].y + 70 } : START;
     this.px = at.x; this.py = at.y;
     S.wave = camp + 1;
-    S.bannerText = camp > 0 ? t("st_seg", { n: camp + 1 }) : t("st_ch1");
+    S.bannerText = camp > 0 ? t("st_seg", { n: camp + 1, m: SEGS }) : chTitle();
     S.bannerN++;
-    S.msg = camp > 0 ? t("st_go") : t("st_radio"); S.msgT = camp > 0 ? 3 : 6;
-    if (camp === 0) this.time.delayedCall(6500, () => { if (!S.msgT || S.msg === t("st_radio")) { S.msg = t("st_intro", { name: S.hero || t("player") }); S.msgT = 4; } });
+    S.msg = camp > 0 ? t("st_go") : CH === 0 ? t("st_radio") : t(`st_in${CH + 1}` as Key, { name: S.hero || t("player") }); S.msgT = camp > 0 ? 3 : 6;
+    if (camp === 0 && CH === 0) this.time.delayedCall(6500, () => { if (!S.msgT || S.msg === t("st_radio")) { S.msg = t("st_intro", { name: S.hero || t("player") }); S.msgT = 4; } });
     this.fitBots();
   }
   /** боты-напарники: отряд до 4 — сколько выбрано в меню, но не больше свободных мест */
@@ -920,6 +946,8 @@ class Game extends Phaser.Scene {
         const q = this.collide(g.x + Math.cos(a) * d, g.y + Math.sin(a) * d, KINDS[k].r);
         const e = this.addEnemy(k, q.x, q.y, this.eid++);
         e.seg = g.seg;
+        // «Хозяин»: огромный медведь-мутант, финал главы 5
+        if (g.boss && j === 0) { e.hp = 360; e.boss = true; e.c.setScale(1.45); S.bannerText = t("st_boss"); S.bannerN++; sfx("thunder", 1); }
       });
     });
     // бродячие снизу — стоять на месте нельзя
@@ -962,7 +990,6 @@ class Game extends Phaser.Scene {
     if (this.seg >= GATES.length && humans.some((p) => p.y < EXIT_Y + 140) && this.segLeft(GATES.length) === 0) {
       if (NET.role === "host") send({ t: "stend" });
       this.storyDone();
-      saveStory(null);
     }
     // сюжет в отряде: выбывший встаёт рядом с живым через 8 с
     if (!S.over) {
@@ -1007,20 +1034,25 @@ class Game extends Phaser.Scene {
     sfx("heal");
     S.msg = t("st_camp"); S.msgT = 4;
     this.popup(c.x, c.y - 40, "+" + S.maxHp, "#8ae05a");
-    S.wave = i + 2; S.bannerText = t("st_seg", { n: i + 2 }); S.bannerN++;
+    S.wave = i + 2; S.bannerText = t("st_seg", { n: i + 2, m: SEGS }); S.bannerN++;
     if (NET.role === "client") this.saveHeroNow();
   }
   storyDone() {
     this.storyEnd = true;
-    S.bannerText = t("st_done"); S.bannerN++;
-    S.msg = t("st_soon"); S.msgT = 6;
+    const last = CH >= CHAPTERS.length - 1;
+    S.bannerText = last ? t("st_win") : t("st_done", { n: CH + 1 }); S.bannerN++;
+    S.msg = last ? t("st_win_d", { name: S.hero || t("player") }) : t("st_next", { n: CH + 2 }); S.msgT = 6;
     sfx("wave", 0.9);
-    if (NET.role === "client") this.saveHeroNow();
-    this.time.delayedCall(7000, () => this.toMenu());
+    if (NET.role === "client") { this.saveHeroNow(); if (last) this.time.delayedCall(9000, () => this.toMenu()); return; }
+    if (last) { saveStory(null); this.time.delayedCall(9000, () => this.toMenu()); return; }
+    // следующая глава: сохраняемся в её начале и перестраиваем мир (гости перестроятся по новому «hi»)
+    storyCh = CH + 1;
+    saveStory({ ch: storyCh + 1, camp: 0, hp: S.maxHp, armor: S.armor, medkits: S.medkits, grenades: Math.max(S.grenades, 2), owned: [...S.owned], clip: fullClips(), weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } });
+    this.time.delayedCall(6000, () => this.scene.restart());
   }
   saveHeroNow() { saveHero({ level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } }); }
   saveCamp(camp: number) {
-    const sv: StorySave = { ch: 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } };
+    const sv: StorySave = { ch: CH + 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } };
     saveStory(sv);
   }
   /** сюжет: погиб — назад в последний лагерь (или к дому) */
@@ -1041,8 +1073,15 @@ class Game extends Phaser.Scene {
 
   buildWorld() {
     const ground = this.add.tileSprite(0, 0, W, H, "ground_meadow").setOrigin(0).setTileScale(0.4).setDepth(-10);
-    void ground;
+    const th = S.story ? CHAPTERS[CH].theme : "farm";
+    if (S.story) ground.setTint(CHAPTERS[CH].tint);
+    /** деревья по местности: ферма — лиственные, шоссе — сосны, городок — редкие, завод — сухие, плотина — сосны и камни */
+    const TREES: Record<string, string[]> = { farm: ["tree_1", "tree_2", "tree_3", "tree_5", "tree_6", "pine_1", "pine_2"], road: ["pine_1", "pine_2", "pine_1", "tree_5", "dead_tree_1"], town: ["tree_1", "tree_2", "tree_6"], factory: ["dead_tree_1", "dead_tree_2", "pine_2"], dam: ["pine_1", "pine_2", "pine_1", "pine_2", "tree_5"] };
+    const BAND: Record<string, string[]> = { farm: ["pine_1", "pine_2", "tree_1", "tree_5", "pine_1"], road: ["pine_1", "pine_2"], town: ["tree_1", "tree_2", "tree_6", "pine_1"], factory: ["dead_tree_1", "dead_tree_2", "pine_2", "pine_1"], dam: ["pine_1", "pine_2"] };
+    /** доли: дерево / камень / сухое дерево */
+    const MIX: Record<string, [number, number]> = { farm: [0.45, 0.85], road: [0.4, 0.8], town: [0.25, 0.55], factory: [0.15, 0.7], dam: [0.35, 0.9] };
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
+    if (S.story) this.themeGround(th, rnd);
     // полуразрушенный дом недалеко от старта
     const st = S.story ? START : { x: W / 2, y: H / 2 };
     this.house = buildHouse(this, st.x + 110, st.y - 250);
@@ -1065,23 +1104,64 @@ class Game extends Phaser.Scene {
     // в сюжете по краям полосы — густой лес (дорога одна)
     if (S.story) for (let y = 60; y < H - 60; y += 46) for (const side of [0, 1]) {
       const x = side ? W - rnd.between(40, 190) : rnd.between(40, 190);
-      if (free(x, y, 14)) { const s = rnd.between(110, 150); place(rnd.pick(["pine_1", "pine_2", "tree_1", "tree_5", "pine_1"]), x, y, s, 15, s * 0.42); }
+      if (free(x, y, 14)) { const s = rnd.between(110, 150); { if (th === "dam") { const r = rnd.between(60, 100); if (free(x + (side ? -150 : 150), y, r * 0.38)) place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x + (side ? -150 : 150), y, r, r * 0.38, 0); } else place(rnd.pick(BAND[th]), x, y, s, 15, s * 0.42); } }
     }
-    for (let n = 0, tries = 0; n < 140 && tries < 3000; tries++) {
+    const nTrees = Math.round(140 * (W * H) / 9e6 * (th === "town" || th === "factory" ? 0.7 : 1));
+    for (let n = 0, tries = 0; n < nTrees && tries < 5000; tries++) {
       const x = rnd.between(80, W - 80), y = rnd.between(80, H - 80);
       const kind = rnd.frac();
-      if (kind < 0.45) { if (free(x, y, 18)) { const s = rnd.between(110, 150); place(rnd.pick(["tree_1", "tree_2", "tree_3", "tree_5", "tree_6", "pine_1", "pine_2"]), x, y, s, 15, s * 0.42); n++; } }
-      else if (kind < 0.85) { const s = rnd.between(55, 110); if (free(x, y, s * 0.38)) { place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x, y, s, s * 0.38, 0); n++; } }
+      if (kind < MIX[th][0]) { if (free(x, y, 18) && !((th === "road" || th === "town") && Math.abs(x - W / 2) < 320)) { const s = rnd.between(110, 150); place(rnd.pick(TREES[th]), x, y, s, 15, s * 0.42); n++; } }
+      else if (kind < MIX[th][1]) { const s = rnd.between(55, 110); if (free(x, y, s * 0.38)) { place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x, y, s, s * 0.38, 0); n++; } }
       else if (free(x, y, 14)) { place(rnd.pick(["dead_tree_1", "dead_tree_2"]), x, y, rnd.between(100, 130), 12, 45); n++; }
     }
     this.buildProps(rnd, free);
     // мелочь без столкновений
-    for (let i = 0; i < 420; i++) {
+    /** где своя земля (асфальт, плиты, бетон) — трава и цветы не растут */
+    const paved = (x: number) => (th === "road" && Math.abs(x - W / 2) < 300) || (th === "town" && x > 230 && x < W - 230) || (th === "factory" && x > 170 && x < W - 170) || th === "dam";
+    for (let i = 0; i < Math.round(420 * (W * H) / 9e6); i++) {
       const dx = rnd.between(0, W), dy = rnd.between(0, H);
-      if (inHouse(hs, dx, dy, 10)) continue;
+      if (inHouse(hs, dx, dy, 10) || (S.story && paved(dx) && rnd.frac() < 0.9)) continue;
       const key = rnd.pick(["grass_1", "grass_2", "grass_1", "flowers_1", "flowers_2", "flowers_3", "bush_red_full", "bush_blue_full", "stone", "stone_2", "grass_2", "flowers_1"]);
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
       this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
+    }
+  }
+
+  /** земля главы поверх травы: дорога, площадь, цех, плотина, поля */
+  themeGround(th: string, rnd: Phaser.Math.RandomDataGenerator) {
+    const band = (key: string, x: number, w: number, y = 0, h = H, sc = 0.5) => this.add.tileSprite(x, y, w, h, key).setOrigin(0).setTileScale(sc).setDepth(-9.6);
+    const g = this.add.graphics().setDepth(-9.5);
+    const cx = W / 2;
+    if (th === "farm") {
+      // поля по сторонам от тропы
+      for (let y = 500; y < H - 700; y += rnd.between(500, 800)) {
+        const left = rnd.frac() < 0.5, w = rnd.between(280, 420), h = rnd.between(220, 360), x = left ? rnd.between(200, 330) : W - rnd.between(200, 330) - w;
+        band("t_farm", x, w, y, h, 0.45);
+        g.lineStyle(3, 0x5a4024, 0.5).strokeRect(x, y, w, h);
+      }
+    } else if (th === "road") {
+      band("t_asphalt", cx - 270, 540);
+      g.fillStyle(0x8a7a5a, 0.85).fillRect(cx - 300, 0, 30, H).fillRect(cx + 270, 0, 30, H);
+      g.fillStyle(0xe8e4d8, 0.85).fillRect(cx - 258, 0, 6, H).fillRect(cx + 252, 0, 6, H);
+      g.fillStyle(0xf0c840, 0.9);
+      for (let y = 0; y < H; y += 96) g.fillRect(cx - 4, y, 8, 50);
+    } else if (th === "town") {
+      band("t_town", 230, W - 460, 0, H, 0.45);
+      band("t_asphalt", cx - 170, 340);
+      g.fillStyle(0xb0aca0, 1).fillRect(cx - 182, 0, 12, H).fillRect(cx + 170, 0, 12, H); // бордюры
+      g.fillStyle(0xeeeae0, 0.9);
+      for (let y = 900; y < H; y += 1500) for (let i = 0; i < 8; i++) g.fillRect(cx - 160 + i * 42, y, 26, 90); // зебры
+    } else if (th === "factory") {
+      band("t_factory", 170, W - 340, 0, H, 0.55);
+      for (const x of [170, W - 186]) for (let y = 0; y < H; y += 40) g.fillStyle((y / 40) % 2 ? 0x1e1c18 : 0xe8c030, 0.9).fillRect(x, y, 16, 40);
+      // рельсы
+      g.fillStyle(0x5a3a22, 1); for (let y = 0; y < H; y += 26) g.fillRect(cx + 150, y, 70, 9);
+      g.fillStyle(0x8a8a86, 1).fillRect(cx + 160, 0, 6, H).fillRect(cx + 204, 0, 6, H);
+    } else if (th === "dam") {
+      band("t_water", 0, 260, 0, H, 0.6); band("t_water", W - 260, 260, 0, H, 0.6);
+      band("t_dam", 260, W - 520, 0, H, 0.55);
+      g.fillStyle(0x5a6064, 1).fillRect(256, 0, 10, H).fillRect(W - 266, 0, 10, H); // парапет
+      g.fillStyle(0xe8c030, 0.8); for (let y = 0; y < H; y += 120) g.fillRect(cx - 3, y, 6, 60);
     }
   }
 
@@ -1130,6 +1210,25 @@ class Game extends Phaser.Scene {
       if (!free(x, y, 30)) continue;
       crate(x, y);
       if (rnd.frac() < 0.4) crate(x + 30, y + rnd.between(-6, 6));
+      n++;
+    }
+    // предметы из срезов: набор зависит от места (ферма, шоссе, городок, завод, плотина)
+    const deco = (name: string, x: number, y: number, rot = rnd.between(0, 7)) => {
+      const o = SV[name], inf = SLICE_INFO[name];
+      if (!o || !inf) return;
+      const im = this.add.image(x, y, "sv_" + name, rot).setDisplaySize(o.w * SV_SCALE, o.h * SV_SCALE).setOrigin(o.x, o.y).setDepth(y);
+      const p = add("deco", x, y, 999, im);
+      ob(p, inf.r * SV_SCALE, inf.low ? { low: true } : { upright: true });
+    };
+    this.deco = deco;
+    const set = this.decoSet();
+    for (let n = 0, tries = 0; n < (S.story ? 70 : 34) && tries < 1500; tries++) {
+      const x = rnd.between(120, W - 120), y = rnd.between(120, H - 120), name = rnd.pick(set);
+      const r = SLICE_INFO[name].r * SV_SCALE;
+      if (!free(x, y, r + 6)) continue;
+      deco(name, x, y);
+      // мелкое — кучками
+      if (r < 8 && rnd.frac() < 0.6) { const x2 = x + rnd.between(-26, 26), y2 = y + rnd.between(14, 26); if (free(x2, y2, r)) deco(name, x2, y2); }
       n++;
     }
     // у дома: ящики, бочка, фонарь и забор
@@ -2513,7 +2612,7 @@ class Game extends Phaser.Scene {
       } else if (e.img) {
         // спрайт смотрит вверх — поворачиваем; походка — лёгкое покачивание
         e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
-        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(0xd8e0c8);
+        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss ? 0xe08878 : 0xd8e0c8);
       }
       // голоса
       e.voice -= dt;
@@ -2629,14 +2728,14 @@ class Game extends Phaser.Scene {
     // имя гостю: то же, что у его фигурки здесь (фигурка заводится сразу, чтобы имя не поменялось)
     const mt = this.mate(id, this.px + 40, this.py + 20);
     send({ t: "hi", x: Math.round(this.px + 40), y: Math.round(this.py + 20), lt: this.light.t, name: mt.name, mode: MODE, hero: S.myName,
-      st: S.story ? { seg: this.seg, camp: this.campDone, gates: this.gates.map((g) => g.open), woke: this.woke, owned: S.owned, end: this.storyEnd } : undefined }, id);
+      st: S.story ? { ch: CH, seg: this.seg, camp: this.campDone, gates: this.gates.map((g) => g.open), woke: this.woke, owned: S.owned, end: this.storyEnd } : undefined }, id);
     // отряд не больше 4: пришёл человек — уходит бот
     if (S.story) this.fitBots();
   }
   applyHi(m: Record<string, any>) {
     // хозяин в другом режиме (или начал сюжет заново) — перестраиваем мир под него
     const mode = m.mode === "story" ? "story" : "waves";
-    if (mode !== MODE || (mode === "story" && syncedHi !== m)) { MODE = mode; syncedHi = m; pendingHi = m; this.scene.restart(); return; }
+    if (mode !== MODE || (mode === "story" && syncedHi !== m)) { MODE = mode; storyCh = m.st?.ch | 0; syncedHi = m; pendingHi = m; this.scene.restart(); return; }
     if (m.hero) S.hero = String(m.hero).slice(0, 16);
     if (S.story && m.st) {
       const st = m.st;
@@ -2646,7 +2745,7 @@ class Game extends Phaser.Scene {
       if (Array.isArray(st.gates)) st.gates.forEach((o: boolean, k: number) => { if (o) this.openGate(k, false); });
       if (Array.isArray(st.owned)) S.owned = S.owned.map((o, k) => o || !!st.owned[k]);
       S.wave = this.seg + 1;
-      S.bannerText = this.seg > 0 ? t("st_seg", { n: this.seg + 1 }) : t("st_ch1"); S.bannerN++;
+      S.bannerText = this.seg > 0 ? t("st_seg", { n: this.seg + 1, m: SEGS }) : chTitle(); S.bannerN++;
     }
     const p = this.collide(m.x, m.y, 10);
     this.px = p.x; this.py = p.y;
@@ -2908,7 +3007,7 @@ class Game extends Phaser.Scene {
       if (e.hum) { e.hum.recoil = Math.max(0, e.hum.recoil - dt * 2.5); e.hum.pose(e.a, e.a, e.ph, 1, false, Math.sin(e.ph * 0.5)); e.hum.flash(e.hitT > 0); }
       else if (e.img) {
         e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
-        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(0xd8e0c8);
+        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss ? 0xe08878 : 0xd8e0c8);
       }
       e.voice -= dt;
       if (e.voice <= 0) {

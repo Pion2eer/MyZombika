@@ -1,6 +1,6 @@
 // Главный экран: выбор режима, игра с другом, настройки, «как играть». Обычный HTML поверх игры
 // (за ним видно живой мир). Настройки хранятся в localStorage.
-import { LANGS, deviceLang, setLang, getLang, t, type Lang } from "./i18n";
+import { LANGS, deviceLang, setLang, getLang, t, type Lang, type Key } from "./i18n";
 import { loadStory } from "./story";
 import { fetchTop, fmtTime, submitScore, localBest, type Result } from "./scores";
 
@@ -166,8 +166,8 @@ function render() {
     c.appendChild(el("h2", {}, esc(t("m_story"))));
     box.appendChild(c);
     const sv = loadStory();
-    if (sv && sv.camp > 0) c.appendChild(btn(`${esc(t("st_continue", { n: sv.camp }))}<small>${esc(t("st_ch1"))}</small>`, () => a.story?.(false), "main", "story"));
-    c.appendChild(btn(`${esc(t("st_new"))}<small>${esc(t("st_new_d"))}</small>`, () => a.story?.(true), sv && sv.camp > 0 ? "" : "main", "story"));
+    if (sv && (sv.camp > 0 || sv.ch > 1)) c.appendChild(btn(`${esc(t("st_continue", { n: sv.camp, c: sv.ch }))}<small>${esc(t(`st_ch${Math.min(5, Math.max(1, sv.ch))}` as Key))}</small>`, () => a.story?.(false), "main", "story"));
+    c.appendChild(btn(`${esc(t("st_new"))}<small>${esc(t("st_new_d"))}</small>`, () => a.story?.(true), sv && (sv.camp > 0 || sv.ch > 1) ? "" : "main", "story"));
     // отряд: боты вместо недостающих игроков
     const sq = el("div", { class: "squad" });
     sq.appendChild(el("span", {}, esc(t("st_squad"))));

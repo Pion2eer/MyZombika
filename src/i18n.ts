@@ -8,15 +8,15 @@ export const LANGS = {
 export type Lang = keyof typeof LANGS;
 
 const ru = {
-  st_continue: "Продолжить · лагерь {n}", st_new: "Новая игра", st_new_d: "Глава 1. Лес и ферма",
-  st_ch1: "Глава 1. Лес и ферма", st_seg: "Участок {n} из 3", st_gate: "Путь закрыт. Осталось врагов: {n}", st_gate_open: "Путь открыт!",
+  st_continue: "Продолжить · глава {c}, лагерь {n}", st_new: "Новая игра", st_new_d: "Глава 1. Лес и ферма",
+  st_ch1: "Глава 1. Лес и ферма", st_seg: "Участок {n} из {m}", st_gate: "Путь закрыт. Осталось врагов: {n}", st_gate_open: "Путь открыт!",
   st_camp: "Лагерь. Игра сохранена. Верстак: рюкзак → Мастерская (U)",
   up_dmg: "урон +20%", up_mag: "магазин +50%", up_rel: "перезарядка быстрее", up_acc: "прицел точнее", up_pierce: "пробивает насквозь",
   lv_up: "Уровень {n}!", lv_hp: "Здоровье +10", lv_dmg: "Урон +8%", lv_rel: "Перезарядка быстрее", lv_spd: "Скорость +4%, граната",
   parts_s: "дет.", parts: "Детали", no_parts: "Не хватает деталей: ещё {n}", workshop: "Мастерская", st_intro: "{name}: надо идти на север, к плотине. Вертолёт ждать не будет", bot_names: "Лис,Док,Север", st_squad: "Отряд", st_solo: "один", st_squad_d: "Боты занимают пустые места в отряде до 4 человек. Друзей зови в игре: пауза → «Позвать друга» (клавиша H). Герой сюжета носит имя хозяина игры", lv_none: "Бонусы уровней появятся со 2-го уровня", level: "Уровень", xp: "опыт",
   b_dmg: "урон", b_rel: "перезарядка", b_spd: "скорость", w_missing: "ещё не найден", up_max: "Максимум", upgrade: "Улучшить",
   need_bench: "Нужен верстак", need_bench_long: "Улучшать можно только у верстака в лагере", shop_hint: "Детали — из ящиков и крупных врагов. Уровни растут от опыта сами",
-  st_dead: "Ты погиб. Возвращаемся в лагерь…", st_done: "Глава 1 пройдена!", st_soon: "Продолжение следует",
+  st_dead: "Ты погиб. Возвращаемся в лагерь…", st_done: "Глава {n} пройдена!", st_soon: "Продолжение следует", st_next: "Дальше — глава {n}. Игра сохранена", st_win: "Вы успели!", st_win_d: "{name} и отряд улетают на последнем вертолёте. Конец", st_boss: "«Хозяин»!", st_in2: "{name}: шоссе забито брошенными машинами. Держимся вместе", st_in3: "{name}: городок. Тут тихо… слишком тихо", st_in4: "{name}: через завод — самый короткий путь к реке", st_in5: "{name}: плотина! Слышу вертолёт… и что-то большое", st_ch2: "Глава 2. Шоссе", st_ch3: "Глава 3. Городок", st_ch4: "Глава 4. Завод", st_ch5: "Глава 5. Плотина",
   st_found: "Найден {w}!", st_radio: "Рация: «Всем выжившим. Эвакуация с плотины на севере. Последний вертолёт через три дня»", st_go: "Иди на север, к плотине",
   st_bridge: "Мост сгорел. Дальше — через лес", st_coop_soon: "Кооператив в сюжете — скоро", st_hint_crate: "Сломай ящик со звездой — там оружие",
   w_rifle: "Автомат", w_shotgun: "Дробовик", w_pistol: "Пистолет", w_grenade: "Гранаты",
@@ -61,15 +61,15 @@ export type Key = keyof typeof ru;
 type Dict = Partial<Record<Key, string>>; // чего нет в языке — берётся из английского
 
 const en: Record<Key, string> = {
-  st_continue: "Continue · camp {n}", st_new: "New game", st_new_d: "Chapter 1. Forest and farm",
-  st_ch1: "Chapter 1. Forest and farm", st_seg: "Area {n} of 3", st_gate: "The way is blocked. Enemies left: {n}", st_gate_open: "The way is open!",
+  st_continue: "Continue · chapter {c}, camp {n}", st_new: "New game", st_new_d: "Chapter 1. Forest and farm",
+  st_ch1: "Chapter 1. Forest and farm", st_seg: "Area {n} of {m}", st_gate: "The way is blocked. Enemies left: {n}", st_gate_open: "The way is open!",
   st_camp: "Camp. Game saved. Workbench: bag → Workshop (U)",
   up_dmg: "damage +20%", up_mag: "magazine +50%", up_rel: "faster reload", up_acc: "better aim", up_pierce: "pierces through",
   lv_up: "Level {n}!", lv_hp: "Health +10", lv_dmg: "Damage +8%", lv_rel: "Faster reload", lv_spd: "Speed +4%, grenade",
   parts_s: "parts", parts: "Parts", no_parts: "Not enough parts: {n} more", workshop: "Workshop", st_intro: "{name}: we must head north to the dam. The helicopter won't wait", bot_names: "Fox,Doc,North", st_squad: "Squad", st_solo: "solo", st_squad_d: "Bots fill empty squad slots up to 4. Invite friends in game: pause → Invite a friend (H key). The story hero is named after the game host", lv_none: "Level bonuses start at level 2", level: "Level", xp: "XP",
   b_dmg: "damage", b_rel: "reload", b_spd: "speed", w_missing: "not found yet", up_max: "Max", upgrade: "Upgrade",
   need_bench: "Need a workbench", need_bench_long: "Upgrades only at a camp workbench", shop_hint: "Parts come from crates and big enemies. Levels grow with XP",
-  st_dead: "You died. Back to the camp…", st_done: "Chapter 1 complete!", st_soon: "To be continued",
+  st_dead: "You died. Back to the camp…", st_done: "Chapter {n} complete!", st_soon: "To be continued", st_next: "Next: chapter {n}. Game saved", st_win: "You made it!", st_win_d: "{name} and the squad fly away on the last helicopter. The end", st_boss: "The Master!", st_in2: "{name}: the highway is jammed with abandoned cars. Stay together", st_in3: "{name}: a small town. Quiet… too quiet", st_in4: "{name}: through the factory is the shortest way to the river", st_in5: "{name}: the dam! I hear the helicopter… and something big", st_ch2: "Chapter 2. Highway", st_ch3: "Chapter 3. Town", st_ch4: "Chapter 4. Factory", st_ch5: "Chapter 5. The dam",
   st_found: "Found: {w}!", st_radio: "Radio: \"To all survivors. Evacuation from the dam up north. Last helicopter in three days\"", st_go: "Head north, to the dam",
   st_bridge: "The bridge burned down. Go through the forest", st_coop_soon: "Co-op in story mode is coming soon", st_hint_crate: "Break the crate with a star — there's a weapon inside",
   w_rifle: "Rifle", w_shotgun: "Shotgun", w_pistol: "Pistol", w_grenade: "Grenades",
