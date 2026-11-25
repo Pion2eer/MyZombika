@@ -13,6 +13,7 @@ const OUT = join(ROOT, "art", "gen");
 const GEN = join(homedir(), ".codex", "generated_images");
 const TIMEOUT = 6 * 60_000;
 const REF = join(ROOT, "tools", "style-ref.png"); // скриншот игры — образец стиля
+const REF2 = join(ROOT, "tools", "style-trees.png"); // деревья и камни игры — образец стиля для набора v2
 
 const UI_STYLE =
   "Game UI icon for a top-down zombie survival game. Chunky hand-painted cartoon style, thick dark brown outline (#14110d), warm saturated colors, " +
@@ -108,6 +109,76 @@ const ITEMS = {
 };
 const TILE_STYLE = "Ground texture for a 2D top-down zombie survival game, bright cartoon painterly style. Fully opaque, edges must wrap seamlessly, even lighting, no objects, no text, no frame.";
 
+// ── набор v2 (2026-11-25): все объекты кроме людей и зомби — картинками в стиле деревьев, под углом камеры игры.
+// node tools/gen-art.mjs --v2 [имя ...] → art/gen2/<папка>/<имя>.png. Порядок — по важности (сначала дома и машины).
+const V2_STYLE =
+  "Game object sprite for a 2D zombie survival game. Match EXACTLY the art style of the attached reference image (image1): the same painterly cartoon trees and rocks, " +
+  "soft hand-painted shading, chunky leaf-like brush strokes, warm light from the top-left, saturated but natural colors, no black outlines. " +
+  "CAMERA: the same high top-down camera as the reference (steep, about 70 degrees): we mostly see the TOP of the object and only a thin strip of its south (front) side, " +
+  "slight perspective like the trees. Use the reference ONLY for style and camera, do not copy its objects. Single object, centered, fills ~90% of the canvas. " +
+  "Transparent background, no grass, no ground, no cast shadow, no text, no letters, no frame.";
+const HOUSE = (what) => `A half-ruined abandoned house: ${what}. Part of the roof has collapsed so we see broken rafters and rooms inside from above, broken windows, debris, planks, some moss and vines.`;
+const ITEMS2 = {
+  // дома — разные, повёрнутые по-разному
+  ruin_1: ["house", 900, 760, HOUSE("small wooden one-storey house with a brown shingle roof, ridge running LEFT-RIGHT, entrance and porch on the south side facing the camera")],
+  ruin_2: ["house", 760, 900, HOUSE("small wooden house with a grey roof, ridge running UP-DOWN (the house is long vertically), entrance on the east side")],
+  ruin_3: ["house", 900, 900, HOUSE("brick house with a red tiled roof, the whole building rotated about 30 degrees clockwise in the picture, one wall partly fallen")],
+  ruin_4: ["house", 900, 900, HOUSE("L-shaped farmhouse with a green metal roof, rotated about 45 degrees, a burnt corner with charred beams")],
+  ruin_5: ["house", 960, 820, HOUSE("two-storey grey stone house, flat roof caved in in the middle, rotated about 15 degrees counter-clockwise")],
+  ruin_6: ["house", 760, 760, HOUSE("tiny log cabin with a moss-covered roof, half of the roof gone, a stone chimney, rotated about 60 degrees")],
+  // машины: два ракурса — боком (нос вправо) и вдоль (нос вверх); налево и вниз — зеркалом в игре
+  car_red_h: ["car", 440, 260, "An abandoned rusty red sedan car seen from the high camera, nose pointing RIGHT, flat tyres, cracked windshield, dirt."],
+  car_red_v: ["car", 240, 420, "An abandoned rusty red sedan car seen from the high camera, nose pointing UP (away from the camera), flat tyres, dirt."],
+  car_teal_h: ["car", 420, 250, "An abandoned faded teal hatchback car seen from the high camera, nose pointing RIGHT, broken side window, dusty."],
+  car_teal_v: ["car", 230, 400, "An abandoned faded teal hatchback car seen from the high camera, nose pointing DOWN (toward the camera), dusty."],
+  car_burnt_h: ["car", 440, 260, "A burnt-out car wreck seen from the high camera, nose pointing RIGHT: charred black and rusty orange metal, no glass, no tyres, ash."],
+  car_burnt_v: ["car", 240, 420, "A burnt-out car wreck seen from the high camera, nose pointing UP: charred black and rusty metal, no glass, no tyres."],
+  police_h: ["car", 440, 260, "An abandoned police car (black and white, red and blue light bar on the roof, no text) seen from the high camera, nose pointing RIGHT, door open."],
+  police_v: ["car", 240, 420, "An abandoned police car (black and white, light bar, no text) seen from the high camera, nose pointing DOWN."],
+  van_h: ["car", 480, 280, "An abandoned cream-colored delivery van seen from the high camera, nose pointing RIGHT, rusty, back doors open."],
+  van_v: ["car", 260, 460, "An abandoned cream-colored delivery van seen from the high camera, nose pointing UP, rusty."],
+  bus_h: ["car", 900, 300, "A wrecked yellow school bus (no text) seen from the high camera, nose pointing RIGHT, broken windows, rusty roof. Very wide image."],
+  truck_h: ["car", 900, 320, "A crashed semi truck with a grey cargo trailer seen from the high camera, nose pointing RIGHT. Very wide image."],
+  // предметы
+  barrel: ["obj", 104, 136, "A red metal fuel barrel standing upright with a yellow flame hazard sign, top lid visible."],
+  barrel_blue: ["obj", 104, 136, "A blue steel oil drum standing upright, top lid visible, a bit of rust."],
+  crate: ["obj", 136, 144, "A wooden supply crate with an X brace, top visible."],
+  tires: ["obj", 144, 120, "A small stack of three old black car tyres."],
+  campfire: ["obj", 160, 136, "A campfire ring of grey stones around charred logs and ash, NO flames."],
+  lamp: ["obj", 104, 336, "A tall dark iron street lamp post, lamp head at the top hanging to the right. Very tall narrow image."],
+  fence: ["obj", 336, 104, "One section of a weathered wooden picket fence, horizontal. Wide image."],
+  sign: ["obj", 136, 160, "A yellow diamond warning sign with a zombie hand silhouette on a short wooden post."],
+  hay_round: ["obj", 200, 180, "Two round hay bales."],
+  hay_block: ["obj", 220, 150, "A stack of rectangular straw bales tied with twine."],
+  well: ["obj", 220, 260, "An old stone water well with a small wooden roof and a bucket."],
+  cart: ["obj", 300, 200, "An old wooden farm cart with two big wheels, half full of hay."],
+  stump: ["obj", 150, 140, "A tree stump with an axe stuck in it, wood chips around."],
+  pumpkins: ["obj", 200, 150, "Three orange pumpkins with leaves."],
+  scarecrow: ["obj", 200, 300, "A creepy scarecrow on a pole in ragged clothes and a straw hat. Tall image."],
+  logs: ["obj", 280, 180, "A pile of cut logs."],
+  gravestone: ["obj", 140, 170, "An old cracked stone gravestone with moss."],
+  cone: ["obj", 110, 130, "An orange traffic cone with white stripes."],
+  road_barrier: ["obj", 320, 140, "A concrete road barrier with red and white stripes. Wide image."],
+  fuel_pump: ["obj", 160, 260, "An old red gas station fuel pump with a hose. Tall image."],
+  road_sign: ["obj", 200, 320, "A green road direction sign on a metal pole (no text, blank). Tall image."],
+  hydrant: ["obj", 110, 140, "A red fire hydrant."],
+  bench: ["obj", 300, 150, "A wooden park bench with metal legs. Wide image."],
+  trash_bin: ["obj", 130, 160, "A green metal street trash bin with a lid."],
+  traffic_light: ["obj", 130, 380, "A traffic light on a metal pole, red light glowing. Very tall image."],
+  mailbox: ["obj", 120, 200, "A blue mailbox on a wooden post."],
+  pallet: ["obj", 240, 200, "A wooden pallet stacked with cardboard boxes."],
+  gas_cyl: ["obj", 200, 220, "A group of three tall gas cylinders (blue and green) chained together."],
+  toolbox: ["obj", 160, 110, "A red metal toolbox, lid half open with tools."],
+  valve: ["obj", 280, 160, "A short industrial pipe with a big yellow valve wheel. Wide image."],
+  sandbags: ["obj", 320, 160, "A curved wall of military sandbags. Wide image."],
+  ammo_crate: ["obj", 200, 130, "An olive green military ammo crate with yellow stencil marks (no letters)."],
+  searchlight: ["obj", 180, 240, "A military searchlight on a tripod."],
+  rock_moss: ["obj", 240, 180, "A cluster of grey boulders with moss."],
+  generator: ["obj", 300, 220, "A big industrial diesel generator with warning stripes."],
+  container_blue: ["obj", 520, 240, "A blue steel shipping container, rusty. Wide image."],
+  container_red: ["obj", 520, 240, "A red steel shipping container, rusty. Wide image."],
+};
+
 function newestImage(since) {
   let best = null;
   const walk = (d) => {
@@ -122,10 +193,10 @@ function newestImage(since) {
   return best?.p ?? null;
 }
 
-function runCodex(prompt, ref) {
+function runCodex(prompt, refPath) {
   return new Promise((resolve) => {
     const args = ["exec", "-", "--skip-git-repo-check", "--sandbox", "read-only", "--enable", "image_generation"];
-    if (ref && existsSync(REF)) args.push("--image", `"${REF}"`);
+    if (refPath && existsSync(refPath)) args.push("--image", `"${refPath}"`);
     const ch = spawn("codex", args, { shell: true, stdio: ["pipe", "ignore", "ignore"] });
     const timer = setTimeout(() => ch.kill(), TIMEOUT);
     ch.on("close", (code) => (clearTimeout(timer), resolve(code)));
@@ -163,21 +234,25 @@ out.paste(im, ((W - im.width) // 2, H - im.height if H > W * 1.2 else (H - im.he
 out.save(dst, optimize=True)
 print(f"{clear:.2f}")`;
 
-const want = process.argv.slice(2);
-const names = (want.length ? want : Object.keys(ITEMS)).filter((n) => ITEMS[n]);
-let made = 0, skipped = 0, failed = 0;
+const V2 = process.argv.includes("--v2");
+const want = process.argv.slice(2).filter((a) => a !== "--v2");
+const LIST = V2 ? ITEMS2 : ITEMS;
+const names = (want.length ? want : Object.keys(LIST)).filter((n) => LIST[n]);
+let made = 0, skipped = 0, failed = 0, fails = 0;
 for (const name of names) {
-  const [dir, w, h, what] = ITEMS[name];
-  mkdirSync(join(OUT, dir), { recursive: true });
-  const dst = join(OUT, dir, `${name}.png`);
+  const [dir, w, h, what] = LIST[name];
+  const out = V2 ? join(ROOT, "art", "gen2") : OUT;
+  mkdirSync(join(out, dir), { recursive: true });
+  const dst = join(out, dir, `${name}.png`);
   if (existsSync(dst) && !want.length) { skipped++; continue; }
   const prompt = `$imagegen Generate exactly ONE image. Do not create files and do not run any commands.\n` +
-    (dir === "tiles" ? `${TILE_STYLE}\nSubject: ${what}\nSquare image.` : `${dir === "ui" ? UI_STYLE : PROP_STYLE}\nSubject: ${what}\nTransparent PNG background.`);
+    (V2 ? `${V2_STYLE}\nSubject: ${what}\nTransparent PNG background.` : dir === "tiles" ? `${TILE_STYLE}\nSubject: ${what}\nSquare image.` : `${dir === "ui" ? UI_STYLE : PROP_STYLE}\nSubject: ${what}\nTransparent PNG background.`);
   const t0 = Date.now();
   process.stdout.write(`${name}… `);
-  await runCodex(prompt, dir === "props" || dir === "build");
+  await runCodex(prompt, V2 ? REF2 : dir === "props" || dir === "build" ? REF : null);
   const img = newestImage(t0 - 1000);
-  if (!img) { failed++; console.log("не получилось"); continue; }
+  if (!img) { failed++; console.log("не получилось"); if (++fails >= 3) { console.log("3 неудачи подряд — похоже, кончился лимит ChatGPT; запусти позже"); break; } continue; }
+  fails = 0;
   try {
     const clear = dir === "tiles"
       ? (execFileSync("python", ["-c", "import sys\nfrom PIL import Image\nImage.open(sys.argv[1]).convert('RGB').resize((int(sys.argv[3]), int(sys.argv[4])), Image.Resampling.LANCZOS).save(sys.argv[2], optimize=True)", img, dst, String(w), String(h)]), 1)
