@@ -8,6 +8,11 @@ export const LANGS = {
 export type Lang = keyof typeof LANGS;
 
 const ru = {
+  st_continue: "Продолжить · лагерь {n}", st_new: "Новая игра", st_new_d: "Глава 1. Лес и ферма",
+  st_ch1: "Глава 1. Лес и ферма", st_seg: "Участок {n} из 3", st_gate: "Путь закрыт. Осталось врагов: {n}", st_gate_open: "Путь открыт!",
+  st_camp: "Лагерь. Игра сохранена", st_dead: "Ты погиб. Возвращаемся в лагерь…", st_done: "Глава 1 пройдена!", st_soon: "Продолжение следует",
+  st_found: "Найден {w}!", st_radio: "Рация: «Всем выжившим. Эвакуация с плотины на севере. Последний вертолёт через три дня»", st_go: "Иди на север, к плотине",
+  st_bridge: "Мост сгорел. Дальше — через лес", st_coop_soon: "Кооператив в сюжете — скоро", st_hint_crate: "Сломай ящик со звездой — там оружие",
   w_rifle: "Автомат", w_shotgun: "Дробовик", w_pistol: "Пистолет", w_grenade: "Гранаты",
   copied_code: "Код {c} скопирован", copied_link: "Ссылка скопирована",
   sound_off: "Звук выключен", sound_on: "Звук включён",
@@ -47,9 +52,14 @@ const ru = {
   howto_items: "С монстров выпадают гранаты, аптечки и бронежилеты. Живи как можно дольше!",
 };
 export type Key = keyof typeof ru;
-type Dict = Record<Key, string>;
+type Dict = Partial<Record<Key, string>>; // чего нет в языке — берётся из английского
 
-const en: Dict = {
+const en: Record<Key, string> = {
+  st_continue: "Continue · camp {n}", st_new: "New game", st_new_d: "Chapter 1. Forest and farm",
+  st_ch1: "Chapter 1. Forest and farm", st_seg: "Area {n} of 3", st_gate: "The way is blocked. Enemies left: {n}", st_gate_open: "The way is open!",
+  st_camp: "Camp. Game saved", st_dead: "You died. Back to the camp…", st_done: "Chapter 1 complete!", st_soon: "To be continued",
+  st_found: "Found: {w}!", st_radio: "Radio: \"To all survivors. Evacuation from the dam up north. Last helicopter in three days\"", st_go: "Head north, to the dam",
+  st_bridge: "The bridge burned down. Go through the forest", st_coop_soon: "Co-op in story mode is coming soon", st_hint_crate: "Break the crate with a star — there's a weapon inside",
   w_rifle: "Rifle", w_shotgun: "Shotgun", w_pistol: "Pistol", w_grenade: "Grenades",
   copied_code: "Code {c} copied", copied_link: "Link copied", sound_off: "Sound off", sound_on: "Sound on",
   grenades_n: "Grenades: {n}", no_meds: "No medkits", hp_full: "Health is already full", heal: "+{n} health",

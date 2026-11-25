@@ -1,6 +1,7 @@
 // Главный экран: выбор режима, игра с другом, настройки, «как играть». Обычный HTML поверх игры
 // (за ним видно живой мир). Настройки хранятся в localStorage.
 import { LANGS, deviceLang, setLang, getLang, t, type Lang } from "./i18n";
+import { loadStory } from "./story";
 import { fetchTop, fmtTime, submitScore, localBest, type Result } from "./scores";
 
 export type Quality = "low" | "med" | "high";
@@ -28,10 +29,10 @@ try { Object.assign(settings, JSON.parse(localStorage.getItem(KEY) || "{}")); } 
 if (!(settings.lang in LANGS)) settings.lang = deviceLang();
 setLang(settings.lang);
 
-export interface MenuActions { waves(): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
+export interface MenuActions { waves(): void; story?(fresh: boolean): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
 
 let root: HTMLDivElement | null = null;
-let page: "main" | "coop" | "settings" | "howto" | "top" | "over" = "main";
+let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" = "main";
 let acts: MenuActions | null = null;
 let joinCode = "";
 
@@ -150,13 +151,19 @@ function render() {
     box.appendChild(g);
     if (joinCode) g.appendChild(btn(`${esc(t("m_join_friend", { c: joinCode }))}`, () => a.join(joinCode), "main", "join"));
     g.appendChild(btn(`${esc(t("m_waves"))}<small>${esc(t("m_waves_d"))}</small>`, () => a.waves(), joinCode ? "" : "main", "waves"));
-    const st = btn(`<span class="tag">${esc(t("m_soon"))}</span>${esc(t("m_story"))}<small>${esc(t("m_story_d"))}</small>`, () => {}, "", "story");
-    st.setAttribute("disabled", "");
-    g.appendChild(st);
+    g.appendChild(btn(`${esc(t("m_story"))}<small>${esc(t("m_story_d"))}</small>`, () => { page = "story"; render(); }, "", "story"));
     g.appendChild(btn(esc(t("m_coop")), () => { page = "coop"; render(); }, "", "coop"));
     g.appendChild(btn(esc(t("m_top")), () => { back = "main"; page = "top"; render(); }, "", "top"));
     g.appendChild(btn(esc(t("m_settings")), () => { page = "settings"; render(); }, "", "settings"));
     g.appendChild(btn(esc(t("m_howto")), () => { page = "howto"; render(); }, "", "howto"));
+  } else if (page === "story") {
+    const c = el("div", { class: "card" });
+    c.appendChild(el("h2", {}, esc(t("m_story"))));
+    box.appendChild(c);
+    const sv = loadStory();
+    if (sv && sv.camp > 0) c.appendChild(btn(`${esc(t("st_continue", { n: sv.camp }))}<small>${esc(t("st_ch1"))}</small>`, () => a.story?.(false), "main", "story"));
+    c.appendChild(btn(`${esc(t("st_new"))}<small>${esc(t("st_new_d"))}</small>`, () => a.story?.(true), sv && sv.camp > 0 ? "" : "main", "story"));
+    c.appendChild(btn(esc(t("m_back")), () => { page = "main"; render(); }, "", "back"));
   } else if (page === "coop") {
     const c = el("div", { class: "card" });
     c.appendChild(el("h2", {}, esc(t("m_coop"))));

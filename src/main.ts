@@ -9,6 +9,7 @@ import { t, type Key } from "./i18n";
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
+import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, loadStory, saveStory, type StorySave } from "./story";
 import { HUD_ART, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
@@ -16,7 +17,16 @@ import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as
 import { Lighting, SHADOW, SHADOW_ALPHA, type Circle } from "./light";
 import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
 
-const W = 3000, H = 3000; // размер мира, px
+let W = 3000, H = 3000; // размер мира, px (в сюжете — длинная вертикальная полоса)
+/** в сюжете не ставим деревья и камни на заслоны, в лагеря и у ящиков с оружием */
+function storyFree(x: number, y: number, r: number) {
+  if (GATES.some((g) => Math.abs(y - g) < r + 70)) return false;
+  if (CAMPS.some((c) => Math.hypot(x - c.x, y - c.y) < r + 170)) return false;
+  if (WEAPON_CRATES.some((c) => Math.hypot(x - c.x, y - c.y) < r + 90)) return false;
+  return true;
+}
+/** режим: волны или сюжет (выбирается в меню, мир строится заново) */
+let MODE: "waves" | "story" = "waves";
 const VOX = 1.0, K = 3, DZ = 0.8, FRAMES = 64; // воксель = 1 px мира; атлас 64 поворота
 const lift = (z: number) => -z * DZ * VOX;
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -67,6 +77,8 @@ export const S = (window as any).S = {
   menu: false,
   /** на узком тачскрине (вертикально) ячейки оружия под стиками — стики и кнопки подняты на столько px */
   lift: 0,
+  /** сюжет: идёт сюжетная глава; bannerText — надпись заставки вместо «Волна N», bannerN — показать заставку ещё раз */
+  story: false, bannerText: "", bannerN: 0,
   msg: "", msgT: 0, daytime: "", net: "", chatOpen: false, chat: [] as { who: string; text: string; t: number; me: boolean }[], myName: "Player 1", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
 };
 
@@ -293,7 +305,7 @@ class Humanoid {
 }
 
 // ───────── враги ─────────
-type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter";
+export type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter";
 const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; score: number; sprite?: string; size?: number; mass: number; blood: number }> = {
   zombie: { hp: 4, speed: 50, r: 11, dmg: 12, score: 10, mass: 1, blood: 0x5a7a2a },
   runner: { hp: 3, speed: 92, r: 11, dmg: 10, score: 15, mass: 1, blood: 0x5a7a2a },
@@ -306,6 +318,7 @@ const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; s
 };
 interface Enemy {
   kind: Kind; x: number; y: number; kx: number; ky: number; hp: number; a: number; ph: number; cool: number; hitT: number;
+  /** сюжет: с какого участка (-1 — бродячий) */ seg?: number;
   hum?: Humanoid; img?: Phaser.GameObjects.Image; c: Phaser.GameObjects.Container; dead: boolean;
   /** через сколько секунд подать голос */
   voice: number;
@@ -341,6 +354,7 @@ interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; c
 type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires";
 /** предмет на карте. Разрушаемые: бочка (взрывается), ящик (ломается, иногда с находкой) */
 interface Prop { id: number; kind: PropKind; x: number; y: number; hp: number; img: Phaser.GameObjects.Image; ob?: Ob; wall?: WallBox; dead: boolean;
+  /** сюжет: в ящике оружие (номер ячейки) */ loot?: number; star?: Phaser.GameObjects.Image;
   /** свет: костёр — всегда (ночью ярче), фонарь — ночью; flick — сила мерцания */
   light?: { dx: number; dy: number; r: number; col: number; a: number; flick: number; night: boolean }; fire?: Phaser.GameObjects.Particles.ParticleEmitter }
 /** горящее пятно после взрыва бочки: жжёт, светится, гаснет */
@@ -428,6 +442,9 @@ class Game extends Phaser.Scene {
   dead = false;
   netNades: Phaser.GameObjects.Image[] = [];
   props: Prop[] = [];
+  /** сюжет: заслоны, лагеря, проснувшиеся группы */
+  gates: { y: number; open: boolean; walls: WallBox[]; imgs: Phaser.GameObjects.GameObject[]; seg: number }[] = [];
+  seg = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
   burns: Burn[] = [];
   lookX = 0; lookY = 0; beatT = 0; ambT = 4;
   constructor() { super("game"); }
@@ -439,7 +456,10 @@ class Game extends Phaser.Scene {
   }
 
   create() {
-    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, hurtV: 0, over: false, msg: "", msgT: 0, move: null, aim: null });
+    [W, H] = MODE === "story" ? [STORY_W, STORY_H] : [3000, 3000];
+    this.gn = Math.ceil(Math.max(W, H) / Game.CELL);
+    this.blocked = new Uint8Array(this.gn * this.gn); this.dist = new Float32Array(this.gn * this.gn);
+    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, hurtV: 0, over: false, msg: "", msgT: 0, move: null, aim: null, story: MODE === "story", bannerText: "", owned: [true, true, true, true] });
     this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.props = []; this.burns = [];
@@ -480,6 +500,7 @@ class Game extends Phaser.Scene {
       g.destroy();
     }
     this.buildWorld();
+    if (S.story) this.storyStart();
     this.bg = this.add.graphics().setDepth(1e6); // пули
     this.aimG = this.add.graphics().setDepth(1e6 + 1); // прицел
     this.blood = this.add.particles(0, 0, "dot", {
@@ -576,7 +597,7 @@ class Game extends Phaser.Scene {
     this.applySettings();
     S.menu = false;
     this.overShown = false;
-    if (menuOnStart) { menuOnStart = false; this.showMenu(); } else { closeMenu(); startRun(); }
+    if (menuOnStart) { menuOnStart = false; this.showMenu(); } else { closeMenu(); if (!S.story) startRun(); }
     this.setupNet();
     if (!this.scene.isActive("ui")) this.scene.launch("ui");
   }
@@ -595,6 +616,7 @@ class Game extends Phaser.Scene {
     autoJoined = true; // ссылку-приглашение предлагаем кнопкой в меню
     openMenu({
       waves: () => this.startPlay(),
+      story: (fresh) => this.startStory(fresh),
       host: () => { this.startPlay(); this.hostGame(); },
       join: (c) => { this.startPlay(); this.joinGame(c); },
       changed: () => this.applySettings(),
@@ -679,9 +701,145 @@ class Game extends Phaser.Scene {
     const kb = this.input.keyboard!;
     kb.enabled = true; kb.enableGlobalCapture(); kb.resetKeys();
   }
+
+  // ───────── сюжет ─────────
+  /** из меню: новая игра или продолжение с последнего лагеря */
+  startStory(fresh: boolean) {
+    if (fresh) saveStory(null);
+    MODE = "story";
+    menuOnStart = false;
+    closeMenu();
+    S.menu = false;
+    unlockAudio();
+    const kb = this.input.keyboard!;
+    kb.enabled = true; kb.enableGlobalCapture(); kb.resetKeys();
+    this.scene.restart();
+  }
+  /** начало главы (или продолжение): герой у дома или в последнем лагере, всё из сохранения */
+  storyStart() {
+    const sv = loadStory();
+    const camp = sv ? Math.min(sv.camp, CAMPS.length) : 0;
+    this.seg = camp; this.storyEnd = false; this.strT = 8; this.gateMsgT = 0;
+    this.woke = GROUPS.map((g) => g.seg < camp);
+    this.campDone = CAMPS.map((_, k) => k < camp);
+    for (let k = 0; k < camp; k++) this.openGate(k, false);
+    S.owned = [false, false, true, true];
+    S.weapon = 2; S.grenades = 1;
+    if (sv) {
+      Object.assign(S, { hp: sv.hp, armor: sv.armor, medkits: sv.medkits, grenades: sv.grenades, owned: sv.owned, clip: { ...fullClips(), ...sv.clip }, weapon: sv.weapon, kills: sv.kills, score: sv.score, time: sv.time });
+      // ящик с оружием, которое уже есть, не нужен
+      for (const p of this.props) if (p.loot !== undefined && S.owned[p.loot]) { p.loot = undefined; p.light = undefined; p.star?.destroy(); }
+    }
+    const at = camp > 0 ? { x: CAMPS[camp - 1].x, y: CAMPS[camp - 1].y + 70 } : START;
+    this.px = at.x; this.py = at.y;
+    S.wave = camp + 1;
+    S.bannerText = camp > 0 ? t("st_seg", { n: camp + 1 }) : t("st_ch1");
+    S.bannerN++;
+    S.msg = camp > 0 ? t("st_go") : t("st_radio"); S.msgT = camp > 0 ? 3 : 6;
+  }
+  /** проход в заслоне открывается: доски разлетаются */
+  openGate(k: number, fx: boolean) {
+    const g = this.gates[k];
+    if (!g || g.open) return;
+    g.open = true;
+    this.walls = this.walls.filter((w) => !g.walls.includes(w));
+    for (const p of this.props) if (p.wall && g.walls.includes(p.wall)) p.dead = true;
+    for (const im of g.imgs) {
+      const i = im as Phaser.GameObjects.Image;
+      if (fx) for (let n = 0; n < 4; n++) this.gib("gib_arm", Phaser.Utils.Array.GetRandom([0xc8945a, 0xa8743a, 0x7a5228]), i.x, i.y, 8, rand(-Math.PI, 0), rand(80, 200), rand(120, 240), { scale: rand(0.5, 0.9), life: rand(5, 8) });
+      const p = this.props.find((q) => q.img === i);
+      if (p?.ob) { this.obs = this.obs.filter((o) => o !== p.ob); this.light.removeShadow(i); p.dead = true; }
+      i.destroy();
+    }
+    if (fx) { sfx("crate", 1); this.cameras.main.shake(160, 0.004); S.msg = t("st_gate_open"); S.msgT = 2.5; }
+    this.buildGrid(); this.flowCell = -1;
+  }
+  /** сколько врагов осталось на участке (живые + ещё спящие группы) */
+  segLeft(k: number) {
+    let n = 0;
+    GROUPS.forEach((g, i) => { if (g.seg === k && !this.woke[i]) n += g.kinds.length; });
+    for (const e of this.enemies) if (!e.dead && e.seg === k) n++;
+    return n;
+  }
+  /** куда идти: закрытый заслон, следующий лагерь или выход */
+  storyGoal(): { x: number; y: number } | null {
+    if (!S.story || this.storyEnd) return null;
+    const k = this.seg;
+    if (k < GATES.length) {
+      const g = this.gates[k];
+      if (g && !g.open) return { x: W / 2, y: g.y };
+      return CAMPS[k];
+    }
+    return { x: W / 2, y: EXIT_Y };
+  }
+  storyTick(dt: number) {
+    if (this.storyEnd) return;
+    // группы просыпаются, когда герой подходит снизу
+    GROUPS.forEach((g, i) => {
+      if (this.woke[i] || this.py - g.y > 760) return;
+      this.woke[i] = true;
+      g.kinds.forEach((k, j) => {
+        const a = (j / g.kinds.length) * TAU, d = 30 + (j % 3) * 26;
+        const q = this.collide(g.x + Math.cos(a) * d, g.y + Math.sin(a) * d, KINDS[k].r);
+        const e = this.addEnemy(k, q.x, q.y, this.eid++);
+        e.seg = g.seg;
+      });
+    });
+    // бродячие снизу — стоять на месте нельзя
+    this.strT -= dt;
+    if (this.strT <= 0) {
+      this.strT = rand(8, 13);
+      const v = this.cameras.main.worldView, y = v.bottom + 90;
+      if (y < H - 60 && this.enemies.filter((e) => !e.dead).length < 12) {
+        const q = this.collide(rand(220, W - 220), y, 11);
+        this.addEnemy(Math.random() < 0.25 ? "runner" : "zombie", q.x, q.y, this.eid++).seg = -1;
+      }
+    }
+    // заслон открывается, когда участок перед ним зачищен
+    const k = this.seg;
+    if (k < this.gates.length && !this.gates[k].open) {
+      const left = this.segLeft(k);
+      if (left === 0) this.openGate(k, true);
+      else if (this.py < this.gates[k].y + 220) {
+        this.gateMsgT -= dt;
+        if (this.gateMsgT <= 0) { this.gateMsgT = 3; S.msg = t("st_gate", { n: left }); S.msgT = 2.4; }
+      }
+    }
+    // лагерь: сохранение, лечение, патроны
+    CAMPS.forEach((c, i) => {
+      if (this.campDone[i] || Math.hypot(this.px - c.x, this.py - c.y) > 140) return;
+      this.campDone[i] = true;
+      this.seg = Math.max(this.seg, i + 1);
+      S.hp = S.maxHp; S.clip = fullClips(); S.grenades = Math.max(S.grenades, 2);
+      this.saveCamp(i + 1);
+      sfx("heal");
+      S.msg = t("st_camp"); S.msgT = 3;
+      this.popup(c.x, c.y - 40, "+" + S.maxHp, "#8ae05a");
+      S.wave = i + 2; S.bannerText = t("st_seg", { n: i + 2 }); S.bannerN++;
+    });
+    // выход наверху — глава пройдена
+    if (this.seg >= GATES.length && this.py < EXIT_Y + 140 && this.segLeft(GATES.length) === 0) {
+      this.storyEnd = true;
+      S.bannerText = t("st_done"); S.bannerN++;
+      S.msg = t("st_soon"); S.msgT = 6;
+      saveStory(null);
+      sfx("wave", 0.9);
+      this.time.delayedCall(7000, () => this.toMenu());
+    }
+  }
+  saveCamp(camp: number) {
+    const sv: StorySave = { ch: 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time) };
+    saveStory(sv);
+  }
+  /** сюжет: погиб — назад в последний лагерь (или к дому) */
+  storyDeath() {
+    S.msg = t("st_dead"); S.msgT = 3;
+    this.time.delayedCall(2600, () => this.scene.restart());
+  }
   /** из паузы — в главное меню (сетевая игра закрывается) */
   toMenu() {
     if (NET.role !== "solo") { saveNet(null); netLeave(); }
+    MODE = "waves";
     S.paused = false; S.inv = false;
     this.tweens.resumeAll();
     menuOnStart = true;
@@ -693,11 +851,12 @@ class Game extends Phaser.Scene {
     void ground;
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
     // полуразрушенный дом недалеко от старта
-    this.house = buildHouse(this, W / 2 + 110, H / 2 - 250);
+    const st = S.story ? START : { x: W / 2, y: H / 2 };
+    this.house = buildHouse(this, st.x + 110, st.y - 250);
     this.walls = this.house.walls;
     const hs = this.house;
     const free = (x: number, y: number, r: number) =>
-      Math.hypot(x - W / 2, y - H / 2) > 220 && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
+      Math.hypot(x - st.x, y - st.y) > 220 && (!S.story || storyFree(x, y, r)) && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
       !(x > hs.bx0 - r - 40 && x < hs.bx1 + r + 40 && y > hs.by0 - r - 50 && y < hs.by1 + r + 30);
     const place = (key: string, x: number, y: number, size: number, r: number, canopy: number) => {
       const img = this.add.image(x, y, key).setDisplaySize(size, size).setDepth(y);
@@ -707,8 +866,13 @@ class Game extends Phaser.Scene {
       this.obs.push({ x, y, r, img, canopy, size });
     };
     // край мира — стена из ёлок
-    for (let t = 0; t < W; t += 70) {
-      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
+    for (let t = 0; t < Math.max(W, H); t += 70) {
+      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) if (x <= W && y <= H) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
+    }
+    // в сюжете по краям полосы — густой лес (дорога одна)
+    if (S.story) for (let y = 60; y < H - 60; y += 46) for (const side of [0, 1]) {
+      const x = side ? W - rnd.between(40, 190) : rnd.between(40, 190);
+      if (free(x, y, 14)) { const s = rnd.between(110, 150); place(rnd.pick(["pine_1", "pine_2", "tree_1", "tree_5", "pine_1"]), x, y, s, 15, s * 0.42); }
     }
     for (let n = 0, tries = 0; n < 140 && tries < 3000; tries++) {
       const x = rnd.between(80, W - 80), y = rnd.between(80, H - 80);
@@ -741,7 +905,7 @@ class Game extends Phaser.Scene {
     };
     const add = (kind: PropKind, x: number, y: number, hp: number, im: Phaser.GameObjects.Image) => { const p: Prop = { id: pid++, kind, x, y, hp, img: im, dead: false }; this.props.push(p); return p; };
     const barrel = (x: number, y: number, blue = false) => { const p = add(blue ? "drum" : "barrel", x, y, blue ? 9 : 3, img(blue ? "barrel_blue" : "barrel", x, y, 0.86)); ob(p, 10, { upright: true }); };
-    const crate = (x: number, y: number) => { const p = add("crate", x, y, 4, img("crate", x, y, 0.88)); ob(p, 14, { upright: true }); };
+    const crate = (x: number, y: number) => { const p = add("crate", x, y, 4, img("crate", x, y, 0.88)); ob(p, 14, { upright: true }); return p; };
     const tires = (x: number, y: number) => { const p = add("tires", x, y, 99, img("tires", x, y, 0.6)); ob(p, 13, { low: true }); };
     // брошенные машины (прямоугольник-препятствие, как стены дома)
     for (let n = 0, tries = 0; n < 8 && tries < 400; tries++) {
@@ -825,6 +989,36 @@ class Game extends Phaser.Scene {
       if (!free(x, y, 16)) continue;
       const p = add("sign", x, y, 99, img("sign", x, y, 0.96)); ob(p, 5, { upright: true }); n++;
     }
+    if (!S.story) return;
+    // ── сюжет: заслоны поперёк полосы (середина открывается, когда участок зачищен), лагеря, ящики с оружием ──
+    this.gates = GATES.map((gy, k) => {
+      const g = { y: gy, open: false, walls: [] as WallBox[], imgs: [] as Phaser.GameObjects.GameObject[], seg: k };
+      for (let x = 50; x < W - 40; x += 78) {
+        const door = Math.abs(x - W / 2) < 130;
+        const im = this.add.image(x, gy, "prop_fence").setDisplaySize(84, 26).setOrigin(0.5, 0.6).setDepth(gy).setTint(door ? 0xd8b890 : 0xffffff);
+        const p = add("fence", x, gy, 1e9, im);
+        p.wall = box(x, gy, 40, 4, 0, 16);
+        this.walls.push(p.wall);
+        if (door) { g.walls.push(p.wall); g.imgs.push(im); }
+      }
+      // у прохода — ящики и бочки, сбоку табличка
+      for (const dx of [-150, 150]) { const c = crate(W / 2 + dx, gy + 26); g.imgs.push(c.img); }
+      barrel(W / 2 - 190, gy + 30); barrel(W / 2 + 196, gy + 34, true);
+      const sp = add("sign", W / 2 + 240, gy + 40, 99, img("sign", W / 2 + 240, gy + 40, 0.96)); ob(sp, 5, { upright: true });
+      return g;
+    });
+    for (const c of CAMPS) {
+      fire(c.x, c.y);
+      crate(c.x + 90, c.y - 20); crate(c.x - 96, c.y + 14);
+      lamp(c.x - 70, c.y - 70, false);
+    }
+    for (const wc of WEAPON_CRATES) {
+      const p = crate(wc.x, wc.y);
+      p.loot = wc.slot; p.hp = 2;
+      p.light = { dx: 0, dy: -10, r: 110, col: 0xffe070, a: 0.55, flick: 0.15, night: false };
+      p.star = this.add.image(wc.x, wc.y - 44, this.textures.exists("hud_score") ? "hud_score" : "dot").setDisplaySize(22, 22).setDepth(wc.y + 50);
+      this.tweens.add({ targets: p.star, y: wc.y - 52, duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    }
   }
   /** пламя: частицы вверх, ярко (ADD) */
   flames(x: number, y: number, scale: number) {
@@ -883,8 +1077,17 @@ class Game extends Phaser.Scene {
       sfx("crate", this.near(p.x, p.y));
       for (let i = 0; i < 10; i++) this.gib("gib_arm", Phaser.Utils.Array.GetRandom([0xc8945a, 0xa8743a, 0x7a5228]), p.x, p.y, 10, rand(0, TAU), rand(60, 200), rand(120, 260), { scale: rand(0.5, 0.9), life: rand(5, 8) });
       this.blood.setParticleTint(0xb88a4e); this.blood.explode(14, p.x, p.y - 12);
+      // ящик с оружием (сюжет)
+      if (p.loot !== undefined) {
+        S.owned[p.loot] = true;
+        const id = SLOTS[p.loot]; S.clip[id] = WEAPONS[id].mag;
+        p.star?.destroy();
+        this.selectWeapon(p.loot);
+        S.msg = t("st_found", { w: wname(id) }); S.msgT = 3; sfx("pickup");
+        this.popup(p.x, p.y - 30, wname(id), "#ffe070");
+      }
       // иногда в ящике что-то есть
-      if (NET.role !== "client") { const r = Math.random(); if (r < 0.2) this.dropItem("grenade", p.x, p.y); else if (r < 0.38) this.dropItem("medkit", p.x, p.y); else if (r < 0.45) this.dropItem("armor", p.x, p.y); }
+      else if (NET.role !== "client") { const r = Math.random(); if (r < 0.2) this.dropItem("grenade", p.x, p.y); else if (r < 0.38) this.dropItem("medkit", p.x, p.y); else if (r < 0.45) this.dropItem("armor", p.x, p.y); }
     }
   }
   /** горящие пятна: жгут монстров и игроков рядом, гаснут */
@@ -1258,6 +1461,7 @@ class Game extends Phaser.Scene {
     const alive = !S.over;
     // время суток из настроек (у гостя — как у хозяина)
     if (NET.role !== "client" && settings.daynight !== "cycle") L.t = Math.floor(L.t) + (settings.daynight === "day" ? 0.25 : 0.72);
+    if (S.story) L.t = Math.floor(L.t) + 0.07; // глава 1 — утро
     L.shadows = settings.quality !== "low";
     L.setRes(settings.quality === "high" ? 1 : 2);
 
@@ -1728,7 +1932,7 @@ class Game extends Phaser.Scene {
     // скрытая вкладка (кооператив в фоне): свет и тени не нужны, только логика и сеть
     if (!document.hidden) { this.light.adapt(dtMs, settings.quality === "high" ? 2 : 1); this.updateLight(dt); }
     if (S.over) {
-      if (!this.overShown) { this.overShown = true; this.showOver(); }
+      if (!this.overShown) { this.overShown = true; if (S.story) this.storyDeath(); else this.showOver(); }
       this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return;
     }
     S.time += dt;
@@ -1977,7 +2181,8 @@ class Game extends Phaser.Scene {
   /** хозяин (и одиночная игра): волны, ход монстров, укусы */
   hostEnemies(dt: number, cam: Phaser.Cameras.Scene2D.Camera) {
     void cam;
-    if (this.spawnQ.length) {
+    if (S.story) this.storyTick(dt);
+    else if (this.spawnQ.length) {
       this.spawnT -= dt;
       if (this.spawnT <= 0) { this.spawn(this.spawnQ.pop()!); this.spawnT = Math.max(0.15, 0.6 - S.wave * 0.04); }
     } else if (!this.enemies.some((e) => !e.dead)) {
@@ -2102,6 +2307,7 @@ class Game extends Phaser.Scene {
 
   hostGame(again?: string) {
     if (NET.role !== "solo") return;
+    if (S.story) { S.msg = t("st_coop_soon"); S.msgT = 2.5; return; }
     S.msg = again ? t("restoring") : t("creating"); S.msgT = 3;
     netHost(again).then((code) => {
       saveNet({ role: "host", code });
@@ -2550,6 +2756,16 @@ class UI extends Phaser.Scene {
       }
       g.fillStyle(m.dead ? 0x50607a : 0x6ab0ff, 1).fillCircle(q.x, q.y, 2.8);
     }
+    // сюжет: куда идти — жёлтое кольцо, а если далеко — жёлтый треугольник на краю
+    const goal = gm.storyGoal();
+    if (goal) {
+      const q = P(goal.x, goal.y);
+      if (inR(q.x, q.y, 6)) g.lineStyle(2, 0xffd040, 1).strokeCircle(q.x, q.y, 4.5);
+      else {
+        const ga = Math.atan2(goal.y - py, goal.x - px), ex = cx + Math.cos(ga) * (R - 6), ey = cy + Math.sin(ga) * (R - 6);
+        g.fillStyle(0xffd040, 1).fillTriangle(ex + Math.cos(ga) * 5, ey + Math.sin(ga) * 5, ex + Math.cos(ga + 2.3) * 5, ey + Math.sin(ga + 2.3) * 5, ex + Math.cos(ga - 2.3) * 5, ey + Math.sin(ga - 2.3) * 5);
+      }
+    }
     // герой: стрелка по прицелу
     const a = gm.aimA, ar = this.mmBig ? 7 : 5.5;
     g.fillStyle(0xffe2a0, 1).lineStyle(1.5, 0x14110d, 1);
@@ -2562,7 +2778,7 @@ class UI extends Phaser.Scene {
   drops: { x: number; y: number; l: number; end: number }[] = [];
   splash: { x: number; y: number; t: number }[] = [];
   drawRain(w: number, h: number, dt: number) {
-    const want = S.wave >= 2 && S.wave % 3 === 2 && !S.over && !S.menu ? 1 : 0;
+    const want = S.wave >= 2 && S.wave % 3 === 2 && !S.over && !S.menu && !S.story ? 1 : 0;
     if (!S.paused) this.rain += Phaser.Math.Clamp(want - this.rain, -dt / 5, dt / 5);
     setRain(S.menu || S.paused ? 0 : this.rain);
     const g = this.rainG.clear();
@@ -2602,9 +2818,9 @@ class UI extends Phaser.Scene {
     }
   }
   /** заставка новой волны: лента через экран, череп, крупная надпись */
-  bannerT!: Phaser.GameObjects.Text; bWave = 0; bT = 9;
+  bannerT!: Phaser.GameObjects.Text; bWave = 0; bT = 9; bN = 0;
   drawBanner(g: Phaser.GameObjects.Graphics, w: number, h: number, dt: number) {
-    if (S.wave !== this.bWave) { if (S.wave > 0 && this.bWave >= 0) this.bT = 0; this.bWave = S.wave; }
+    if (S.wave !== this.bWave || S.bannerN !== this.bN) { if (S.wave > 0 && this.bWave >= 0) this.bT = 0; this.bWave = S.wave; this.bN = S.bannerN; }
     const D = 2.6, tt = this.bT;
     if (tt >= D || S.over || S.paused) { this.bannerT.setVisible(false); this.bT += dt; return; }
     this.bT += dt;
@@ -2630,7 +2846,7 @@ class UI extends Phaser.Scene {
     // надпись прилетает крупной и «падает» на ленту
     const k = Phaser.Math.Clamp((tt - 0.12) / 0.22, 0, 1), sc = 1 + (1 - k) * (1 - k) * 1.4;
     const fs = Math.min(46, bh * 0.56);
-    this.bannerT.setText(t("wave_n", { n: S.wave }).toUpperCase()).setFontSize(fs).setScale(sc).setAlpha(k * fade).setVisible(true);
+    this.bannerT.setText((S.story && S.bannerText ? S.bannerText : t("wave_n", { n: S.wave })).toUpperCase()).setFontSize(fs).setScale(sc).setAlpha(k * fade).setVisible(true);
     const iw = fs * 1.05, tw = this.bannerT.width * sc;
     this.bannerT.setPosition(w / 2 + iw / 2 + 4, cy + 1);
     const ic = this.img("wave", w / 2 - tw / 2 - iw / 2 - 4, cy, (fs / 26) * 1.05 * sc, k * fade);
@@ -2882,7 +3098,9 @@ class UI extends Phaser.Scene {
       this.big.setAlpha(0); // итоги — на экране смерти (menu.ts)
     } else {
       const wv = S.msg === t("wave_n", { n: S.wave }); // номер волны показывает заставка
-      this.big.setPosition(w / 2, h * 0.28).setText(S.msg).setFontSize(42).setAlpha(wv ? 0 : Phaser.Math.Clamp(S.msgT, 0, 1));
+      // длинное сообщение (рация в сюжете) — мельче и в несколько строк; под заставкой, если она идёт
+      const long = S.msg.length > 34, under = this.bT < 2.6 && !wv;
+      this.big.setPosition(w / 2, h * (under ? 0.44 : 0.28)).setText(S.msg).setFontSize(long ? Math.min(24, w / 30) : 42).setWordWrapWidth(w * 0.86, true).setAlpha(wv ? 0 : Phaser.Math.Clamp(S.msgT, 0, 1));
     }
     this.drawBanner(g, w, h, dt);
     this.drawRain(w, h, dt);
