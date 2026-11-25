@@ -47,7 +47,66 @@ const ITEMS = {
   fence: ["props", 336, 104, "One section of a weathered wooden picket fence, seen from the front-top, horizontal. Wide image 3:1."],
   sign: ["props", 136, 160, "A yellow diamond warning sign with a black zombie hand silhouette, on a short wooden post."],
   tires: ["props", 144, 120, "A small stack of three old black car tires."],
+  // оружие на панели внизу — вид сбоку
+  w_rifle: ["ui", 256, 104, "Side view of a worn military assault rifle with a curved magazine, wooden grip, pointing RIGHT. Wide image 5:2."],
+  w_shotgun: ["ui", 256, 88, "Side view of a pump-action shotgun with a wooden stock and pump, pointing RIGHT. Wide image 3:1."],
+  w_pistol: ["ui", 144, 104, "Side view of a black semi-automatic pistol, pointing RIGHT."],
+  w_grenade: ["ui", 96, 112, "An olive green frag hand grenade with ring pin and spoon, side view, upright."],
+  // ── глава 1: лес и ферма ──
+  barn: ["build", 640, 560, "A big old red wooden barn with a grey shingle roof (we see the roof from above and the front wall with big double doors), slightly damaged."],
+  farmhouse: ["build", 600, 520, "A small rural farmhouse with a brown roof, porch, boarded-up windows, abandoned."],
+  silo: ["build", 240, 440, "A tall rusty grain silo with a dome top, ladder on the side. Tall image."],
+  haystack: ["build", 240, 200, "A round golden hay bale stack, three bales."],
+  tractor: ["build", 360, 280, "An old rusty green farm tractor, abandoned, big rear wheels."],
+  windmill: ["build", 320, 480, "A rusty metal farm windpump (windmill) on a lattice tower. Tall image."],
+  well: ["build", 200, 220, "A stone water well with a small wooden roof and a bucket."],
+  woodpile: ["build", 280, 180, "A pile of chopped firewood logs with an axe stuck in a stump."],
+  scarecrow: ["build", 180, 260, "A creepy scarecrow on a pole in ragged clothes and a straw hat."],
+  // ── глава 2: шоссе ──
+  gas_station: ["build", 720, 520, "An abandoned roadside gas station: canopy roof on pillars over two fuel pumps, broken sign, from above at 3/4."],
+  bus_wreck: ["build", 640, 260, "STRICTLY top-down view of a wrecked yellow school bus lying on the road, nose pointing RIGHT, broken windows. Wide image."],
+  truck_wreck: ["build", 640, 260, "STRICTLY top-down view of a crashed semi truck with a grey trailer, nose pointing RIGHT. Wide image."],
+  police_car: ["build", 448, 216, "STRICTLY top-down view of an abandoned police car, black and white, light bar on the roof, nose pointing RIGHT. Wide image 2:1."],
+  billboard: ["build", 520, 360, "A big roadside billboard on two posts with a torn faded advertisement poster (no readable text)."],
+  barrier: ["build", 320, 120, "A row of concrete road barriers (jersey barriers) with red and white stripes. Wide image."],
+  cones: ["build", 200, 140, "Three orange traffic cones, one knocked over."],
+  motel: ["build", 720, 480, "A small one-storey roadside motel block with four doors, flat roof, broken neon frame (no text)."],
+  // ── глава 3: городок ──
+  shop: ["build", 640, 520, "A small-town brick shop building with a striped awning, smashed shop window, flat roof from above."],
+  town_house: ["build", 600, 560, "A two-storey town house with a red tiled roof, balcony and boarded windows."],
+  kiosk: ["build", 260, 240, "A small street news kiosk, green paint, closed shutters."],
+  bus_stop: ["build", 360, 220, "A bus stop shelter with glass panels (one broken) and a bench."],
+  fountain: ["build", 360, 300, "A round stone town fountain, dry, cracked, with a small statue in the middle."],
+  phone_booth: ["build", 140, 260, "An old red phone booth with cracked glass. Tall image."],
+  playground: ["build", 420, 320, "A rusty children's swing set and a small slide, abandoned."],
+  // ── глава 4: завод ──
+  factory: ["build", 760, 560, "A large industrial factory hall with a sawtooth roof, rusty corrugated metal walls, big gate."],
+  chimney: ["build", 220, 560, "A tall brick factory chimney with black soot at the top. Very tall image."],
+  container_blue: ["build", 520, 220, "A blue steel shipping container, ribbed walls, seen from above at 3/4, rusty. Wide image."],
+  container_red: ["build", 520, 220, "A red steel shipping container, ribbed walls, seen from above at 3/4, rusty. Wide image."],
+  pipes: ["build", 480, 260, "A cluster of big industrial pipes and valves with yellow handwheels. Wide image."],
+  forklift: ["build", 300, 260, "A yellow forklift truck, abandoned, forks lowered."],
+  water_tank: ["build", 320, 440, "A rusty industrial water tower tank on four legs. Tall image."],
+  spool: ["build", 200, 180, "A big wooden cable spool lying on its side with black cable."],
+  // ── глава 5: плотина ──
+  dam_tower: ["build", 360, 560, "A concrete dam control tower with small windows and an antenna on top. Tall image."],
+  crane: ["build", 520, 560, "A yellow construction crane base with a lattice mast (we see it from above at 3/4)."],
+  generator: ["build", 320, 240, "A big industrial diesel generator box with warning stripes and cables."],
+  helipad: ["build", 520, 520, "STRICTLY top-down view of a round concrete helicopter landing pad with a big painted H and yellow circle, cracked."],
+  sandbags: ["build", 360, 160, "A curved wall of military sandbags. Wide image."],
+  watchtower: ["build", 320, 520, "A wooden military watchtower on stilts with a ladder and a searchlight. Tall image."],
+  boat: ["build", 480, 220, "STRICTLY top-down view of a small abandoned motor boat lying on dry ground, nose pointing RIGHT. Wide image."],
+  rocks: ["build", 320, 220, "A cluster of large grey granite boulders with some moss."],
+  // ── земля глав: бесшовные плитки, строго сверху ──
+  t_grass: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: lush meadow grass with small flowers and clover."],
+  t_farm: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: dry farm soil with plowed furrows and straw."],
+  t_asphalt: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: cracked old asphalt with small weeds in the cracks."],
+  t_town: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: grey stone paving slabs, cracked, with dirt."],
+  t_factory: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: stained industrial concrete floor with oil spots and rust."],
+  t_dam: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: rough wet concrete with moss and puddles."],
+  t_water: ["tiles", 512, 512, "Seamless tileable texture, STRICTLY top-down: dark river water with gentle ripples."],
 };
+const TILE_STYLE = "Ground texture for a 2D top-down zombie survival game, bright cartoon painterly style. Fully opaque, edges must wrap seamlessly, even lighting, no objects, no text, no frame.";
 
 function newestImage(since) {
   let best = null;
@@ -113,14 +172,16 @@ for (const name of names) {
   const dst = join(OUT, dir, `${name}.png`);
   if (existsSync(dst) && !want.length) { skipped++; continue; }
   const prompt = `$imagegen Generate exactly ONE image. Do not create files and do not run any commands.\n` +
-    `${dir === "ui" ? UI_STYLE : PROP_STYLE}\nSubject: ${what}\nTransparent PNG background.`;
+    (dir === "tiles" ? `${TILE_STYLE}\nSubject: ${what}\nSquare image.` : `${dir === "ui" ? UI_STYLE : PROP_STYLE}\nSubject: ${what}\nTransparent PNG background.`);
   const t0 = Date.now();
   process.stdout.write(`${name}… `);
-  await runCodex(prompt, dir === "props");
+  await runCodex(prompt, dir === "props" || dir === "build");
   const img = newestImage(t0 - 1000);
   if (!img) { failed++; console.log("не получилось"); continue; }
   try {
-    const clear = Number(execFileSync("python", ["-c", PY, img, dst, String(w), String(h)]).toString().trim());
+    const clear = dir === "tiles"
+      ? (execFileSync("python", ["-c", "import sys\nfrom PIL import Image\nImage.open(sys.argv[1]).convert('RGB').resize((int(sys.argv[3]), int(sys.argv[4])), Image.Resampling.LANCZOS).save(sys.argv[2], optimize=True)", img, dst, String(w), String(h)]), 1)
+      : Number(execFileSync("python", ["-c", PY, img, dst, String(w), String(h)]).toString().trim());
     made++;
     console.log(`готово за ${Math.round((Date.now() - t0) / 1000)} с${clear < 0.05 ? " (фон убран)" : ""}`);
   } catch (e) { failed++; console.log("ошибка обработки: " + String(e).slice(0, 200)); }
