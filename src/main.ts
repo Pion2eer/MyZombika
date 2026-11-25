@@ -9,7 +9,7 @@ import { t, type Key } from "./i18n";
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
-import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, loadStory, saveStory, type StorySave } from "./story";
+import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
 import { HUD_ART, HUD_FILE, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
@@ -100,6 +100,8 @@ export const S = (window as any).S = {
   /** оружие: выбранная ячейка (0..3), патроны в магазинах, какое оружие есть (в «волнах» — всё) */
   weapon: 0, clip: baseClips(), owned: [true, true, true, true],
   /** прокачка: уровень, опыт, детали, ступени улучшения оружия; верстак рядом (в «волнах» — всегда) */
+  /** имя героя сюжета — как назвался хозяин игры */
+  hero: "",
   level: 1, xp: 0, parts: 0, up: { rifle: 0, shotgun: 0, pistol: 0, grenade: 0 } as Record<WeaponId, number>, bench: true, invTab: 0,
   armor: 0, medkits: 0, inv: false, hits: [] as Hit[],
   /** открыт главный экран */
@@ -398,7 +400,12 @@ function shotBullets(w: WeaponDef, x: number, y: number, as: number[], vis: bool
   return as.map((a) => ({ x, y, dx: Math.cos(a), dy: Math.sin(a), life: w.life * (w.pellets > 1 ? rand(0.85, 1.15) : 1), d: 0, bounces: 0, dmg: w.dmg, kb: w.kb, pierce: (w as WStat).pierce ?? 0, tr: w.pellets > 1 ? 9 : 16, vis }));
 }
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
-interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number; w: number; armor: number; med: number }
+interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: Humanoid; x: number; y: number; tx: number; ty: number; fx?: number; fy?: number; iu?: number; gap: number; last: number; aimA: number; moveA: number; ph: number; moving: number; muzzle: number; hp: number; dead: boolean; gren: number; seen: number; w: number; armor: number; med: number;
+  /** макс. здоровье гостя (с бонусами уровня), сколько секунд лежит (сюжет), бот-напарник */
+  mh?: number; deadT?: number; bot?: Bot }
+/** мозги бота-напарника (у хозяина или в одиночной игре) */
+interface Bot { idx: number; think: number; tgt?: Enemy; fireT: number; rel: number; clip: number; stuckT: number }
+const BOT_GUN: WeaponDef = { ...WEAPONS.rifle, dmg: 0.8 };
 const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear", "spitter"];
 /** летящий кусок плоти (от метателя): дуга, за ним капает кровь */
 interface Spit { x: number; y: number; z: number; vx: number; vy: number; vz: number; drip: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image; vis: boolean }
@@ -431,6 +438,8 @@ function copyInvite(what: "code" | "link") {
 }
 /** у гостя: где хозяин поставил героя (запоминаем — сцена могла перезапуститься) */
 let pendingHi: Record<string, any> | null = null;
+/** гость в сюжете: по какому «hi» хозяина уже перезапущен мир (новый «hi» — хозяин начал заново с лагеря) */
+let syncedHi: Record<string, any> | null = null;
 
 class Game extends Phaser.Scene {
   player!: Humanoid;
@@ -475,7 +484,7 @@ class Game extends Phaser.Scene {
   props: Prop[] = [];
   /** сюжет: заслоны, лагеря, проснувшиеся группы */
   gates: { y: number; open: boolean; walls: WallBox[]; imgs: Phaser.GameObjects.GameObject[]; seg: number }[] = [];
-  seg = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
+  seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
   burns: Burn[] = [];
   lookX = 0; lookY = 0; beatT = 0; ambT = 4;
   constructor() { super("game"); }
@@ -750,6 +759,17 @@ class Game extends Phaser.Scene {
   }
   /** начало главы (или продолжение): герой у дома или в последнем лагере, всё из сохранения */
   storyStart() {
+    if (!S.hero) S.hero = S.myName;
+    if (NET.role === "client") {
+      // гость: мир и участок — от хозяина (в «hi»), своя прокачка — из своего сохранения
+      this.seg = 0; this.storyEnd = false; this.strT = 1e9; this.gateMsgT = 0;
+      this.woke = GROUPS.map(() => true); this.campDone = CAMPS.map(() => false);
+      S.owned = [false, false, true, true]; S.weapon = 2; S.grenades = 1;
+      const hv = loadHero();
+      if (hv) Object.assign(S, { level: hv.level, xp: hv.xp, parts: hv.parts, up: { ...S.up, ...hv.up } });
+      S.maxHp = heroMaxHp(); S.hp = S.maxHp; S.clip = fullClips();
+      return;
+    }
     const sv = loadStory();
     const camp = sv ? Math.min(sv.camp, CAMPS.length) : 0;
     this.seg = camp; this.storyEnd = false; this.strT = 8; this.gateMsgT = 0;
@@ -771,6 +791,86 @@ class Game extends Phaser.Scene {
     S.bannerText = camp > 0 ? t("st_seg", { n: camp + 1 }) : t("st_ch1");
     S.bannerN++;
     S.msg = camp > 0 ? t("st_go") : t("st_radio"); S.msgT = camp > 0 ? 3 : 6;
+    if (camp === 0) this.time.delayedCall(6500, () => { if (!S.msgT || S.msg === t("st_radio")) { S.msg = t("st_intro", { name: S.hero || t("player") }); S.msgT = 4; } });
+    this.fitBots();
+  }
+  /** боты-напарники: отряд до 4 — сколько выбрано в меню, но не больше свободных мест */
+  fitBots() {
+    if (NET.role === "client" || !S.story) return;
+    const humans = [...this.mates.values()].filter((m) => !m.bot).length;
+    const want = Math.max(0, Math.min(settings.bots ?? 0, 3 - humans));
+    const bots = [...this.mates.values()].filter((m) => m.bot);
+    while (bots.length > want) { const m = bots.pop()!; m.hum.c.destroy(); m.label.destroy(); this.mates.delete(m.id); }
+    const names = t("bot_names").split(",");
+    for (let i = 0; bots.length < want && i < 3; i++) {
+      const id = `bot${i}`;
+      if (this.mates.has(id)) continue;
+      const q = this.collide(this.px - 50 + i * 50, this.py + 50, 10);
+      const m = this.mate(id, q.x, q.y);
+      m.name = names[i] ?? `Bot ${i + 1}`; m.label.setText(m.name).setColor("#c8f0a0");
+      m.bot = { idx: i, think: 0, fireT: 0, rel: 0, clip: 30, stuckT: 0 };
+      m.w = 0; m.mh = 100; m.hp = 100;
+      bots.push(m);
+    }
+  }
+  /** бот: держится за ведущим, стреляет в ближайшего монстра, отходит от тех, кто подошёл вплотную */
+  updateBots(dt: number) {
+    if (NET.role === "client") return;
+    const bots = [...this.mates.values()].filter((m) => m.bot);
+    if (!bots.length) return;
+    const now = performance.now();
+    const alive = [...this.mates.values()].find((q) => !q.dead && !q.bot) ?? bots.find((q) => !q.dead);
+    const lead = !this.dead ? { x: this.px, y: this.py, a: this.moveA } : alive ? { x: alive.x, y: alive.y, a: alive.moveA } : null;
+    bots.forEach((m, i) => {
+      const b = m.bot!; m.seen = now;
+      if (m.dead || !lead) return;
+      b.think -= dt;
+      if (b.think <= 0 || b.tgt?.dead) {
+        b.think = rand(0.18, 0.3);
+        let best: Enemy | undefined, bd = 400;
+        for (const e of this.enemies) { if (e.dead) continue; const d = Math.hypot(e.x - m.x, e.y - m.y); if (d < bd) { bd = d; best = e; } }
+        b.tgt = best;
+      }
+      // место в строю: позади ведущего, веером
+      const side = i - (bots.length - 1) / 2, back = lead.a + Math.PI;
+      let gx = lead.x + Math.cos(back) * 62 + Math.cos(back + Math.PI / 2) * side * 50, gy = lead.y + Math.sin(back) * 62 + Math.sin(back + Math.PI / 2) * side * 50;
+      const dl = Math.hypot(lead.x - m.x, lead.y - m.y);
+      if (b.tgt) { const d = Math.hypot(b.tgt.x - m.x, b.tgt.y - m.y); if (d < 110 && d > 1) { gx = m.x - ((b.tgt.x - m.x) / d) * 90; gy = m.y - ((b.tgt.y - m.y) / d) * 90; } }
+      const dx = gx - m.x, dy = gy - m.y, d = Math.hypot(dx, dy);
+      let mv = 0;
+      if (d > 16) {
+        const sp = 165 * (dl > 220 ? 1.3 : 1), st = Math.min(d, sp * dt);
+        const q = this.collide(m.x + (dx / d) * st, m.y + (dy / d) * st, 10);
+        const went = Math.hypot(q.x - m.x, q.y - m.y);
+        mv = went / (sp * dt + 1e-6);
+        m.x = q.x; m.y = q.y; m.moveA = Math.atan2(dy, dx); m.ph += went * 0.12;
+        b.stuckT = mv < 0.25 && d > 80 ? b.stuckT + dt : 0;
+      }
+      // отстал или застрял — догоняет (перебегает к ведущему)
+      if (dl > 560 || b.stuckT > 1.6) { const q = this.collide(lead.x + Math.cos(back) * 50 + side * 30, lead.y + Math.sin(back) * 50, 10); m.x = q.x; m.y = q.y; b.stuckT = 0; }
+      m.moving = Phaser.Math.Linear(m.moving, Math.min(1, mv), 0.25);
+      m.tx = m.fx = m.x; m.ty = m.fy = m.y;
+      // стрельба
+      b.fireT -= dt; b.rel -= dt;
+      if (b.tgt) {
+        m.aimA = Math.atan2(b.tgt.y - m.y, b.tgt.x - m.x);
+        if (b.rel <= 0 && b.fireT <= 0) {
+          if (b.clip <= 0) { b.rel = 1.8; b.clip = 30; }
+          else {
+            b.clip--; b.fireT = rand(0.13, 0.24);
+            const a = Math.round((m.aimA + (Math.random() - 0.5) * 0.12) * 1000) / 1000;
+            const bx = Math.round(m.x + Math.cos(a) * 6), by = Math.round(m.y + Math.sin(a) * 6);
+            this.bullets.push(...shotBullets(BOT_GUN, bx, by, [a], false));
+            m.muzzle = 0.06; m.hum.recoil = 1;
+            sfx("shot", this.near(m.x, m.y) * 0.55);
+            if (NET.role === "host") send({ t: "fx", k: "shot", who: m.id, x: bx, y: by, as: [a], w: "rifle" });
+          }
+        }
+      } else {
+        m.aimA = m.moveA;
+        if (m.hp < 100) m.hp = Math.min(100, m.hp + dt * 2); // без боя понемногу лечится
+      }
+    });
   }
   /** проход в заслоне открывается: доски разлетаются */
   openGate(k: number, fx: boolean) {
@@ -787,6 +887,7 @@ class Game extends Phaser.Scene {
       i.destroy();
     }
     if (fx) { sfx("crate", 1); this.cameras.main.shake(160, 0.004); S.msg = t("st_gate_open"); S.msgT = 2.5; }
+    if (NET.role === "host") send({ t: "gate", k });
     this.buildGrid(); this.flowCell = -1;
   }
   /** сколько врагов осталось на участке (живые + ещё спящие группы) */
@@ -810,8 +911,9 @@ class Game extends Phaser.Scene {
   storyTick(dt: number) {
     if (this.storyEnd) return;
     // группы просыпаются, когда герой подходит снизу
+    const all = this.targets(), humans = this.humans();
     GROUPS.forEach((g, i) => {
-      if (this.woke[i] || this.py - g.y > 760) return;
+      if (this.woke[i] || !all.some((p) => p.y - g.y < 760)) return;
       this.woke[i] = true;
       g.kinds.forEach((k, j) => {
         const a = (j / g.kinds.length) * TAU, d = 30 + (j % 3) * 26;
@@ -840,30 +942,83 @@ class Game extends Phaser.Scene {
         if (this.gateMsgT <= 0) { this.gateMsgT = 3; S.msg = t("st_gate", { n: left }); S.msgT = 2.4; }
       }
     }
-    // верстак — в пройденном лагере
-    S.bench = CAMPS.some((c, i) => this.campDone[i] && Math.hypot(this.px - c.x, this.py - c.y) < 190);
-    // лагерь: сохранение, лечение, патроны
+    this.storyBench();
+    // лагерь: сохранение, лечение, патроны (дошёл хоть один человек из отряда)
     CAMPS.forEach((c, i) => {
-      if (this.campDone[i] || Math.hypot(this.px - c.x, this.py - c.y) > 140) return;
+      if (this.campDone[i] || !humans.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < 140)) return;
       this.campDone[i] = true;
       this.seg = Math.max(this.seg, i + 1);
-      S.hp = S.maxHp; S.clip = fullClips(); S.grenades = Math.max(S.grenades, 2);
+      // выбывшие встают, у всех полное здоровье
+      if (this.dead) { const q = this.collide(c.x, c.y + 70, 10); this.px = q.x; this.py = q.y; this.revive(); }
+      for (const m of this.mates.values()) {
+        if (m.dead) { this.reviveMate(m, c.x + rand(-40, 40), c.y + 70); }
+        m.hp = m.mh ?? 100;
+      }
+      if (NET.role === "host") send({ t: "camp", i });
+      this.campReached(i);
       this.saveCamp(i + 1);
-      sfx("heal");
-      S.msg = t("st_camp"); S.msgT = 4;
-      this.popup(c.x, c.y - 40, "+" + S.maxHp, "#8ae05a");
-      S.wave = i + 2; S.bannerText = t("st_seg", { n: i + 2 }); S.bannerN++;
     });
     // выход наверху — глава пройдена
-    if (this.seg >= GATES.length && this.py < EXIT_Y + 140 && this.segLeft(GATES.length) === 0) {
-      this.storyEnd = true;
-      S.bannerText = t("st_done"); S.bannerN++;
-      S.msg = t("st_soon"); S.msgT = 6;
+    if (this.seg >= GATES.length && humans.some((p) => p.y < EXIT_Y + 140) && this.segLeft(GATES.length) === 0) {
+      if (NET.role === "host") send({ t: "stend" });
+      this.storyDone();
       saveStory(null);
-      sfx("wave", 0.9);
-      this.time.delayedCall(7000, () => this.toMenu());
+    }
+    // сюжет в отряде: выбывший встаёт рядом с живым через 8 с
+    if (!S.over) {
+      const near = () => { const a = this.targets(); return a.length ? a[Math.floor(Math.random() * a.length)] : null; };
+      if (this.dead) {
+        this.deadT += dt;
+        const p = this.deadT > 8 ? near() : null;
+        if (p) { const q = this.collide(p.x + rand(-40, 40), p.y + 40, 10); this.px = q.x; this.py = q.y; this.revive(); this.deadT = 0; }
+      } else this.deadT = 0;
+      for (const m of this.mates.values()) {
+        if (!m.dead) { m.deadT = 0; continue; }
+        m.deadT = (m.deadT ?? 0) + dt;
+        const p = m.deadT > 8 ? near() : null;
+        if (p) this.reviveMate(m, p.x + rand(-40, 40), p.y + 40);
+      }
     }
   }
+  /** живые люди отряда (без ботов) */
+  humans() {
+    const r: { x: number; y: number }[] = [];
+    if (!this.dead) r.push({ x: this.px, y: this.py });
+    for (const m of this.mates.values()) if (!m.dead && !m.bot) r.push(m);
+    return r;
+  }
+  reviveMate(m: Mate, x: number, y: number) {
+    const q = this.collide(x, y, 10);
+    m.dead = false; m.deadT = 0; m.hp = Math.round((m.mh ?? 100) * 0.6);
+    m.hum.body.clearTint(); m.hum.head.clearTint();
+    if (m.bot) { m.x = m.tx = m.fx = q.x; m.y = m.ty = m.fy = q.y; }
+    else send({ t: "tp", x: Math.round(q.x), y: Math.round(q.y) }, m.id);
+  }
+  /** верстак — в пройденном лагере */
+  storyBench() {
+    S.bench = CAMPS.some((c, i) => this.campDone[i] && Math.hypot(this.px - c.x, this.py - c.y) < 190);
+  }
+  /** лагерь взят (у хозяина и у гостей): лечение, патроны, баннер */
+  campReached(i: number) {
+    const c = CAMPS[i];
+    this.campDone[i] = true;
+    this.seg = Math.max(this.seg, i + 1);
+    S.hp = S.maxHp; S.clip = fullClips(); S.grenades = Math.max(S.grenades, 2);
+    sfx("heal");
+    S.msg = t("st_camp"); S.msgT = 4;
+    this.popup(c.x, c.y - 40, "+" + S.maxHp, "#8ae05a");
+    S.wave = i + 2; S.bannerText = t("st_seg", { n: i + 2 }); S.bannerN++;
+    if (NET.role === "client") this.saveHeroNow();
+  }
+  storyDone() {
+    this.storyEnd = true;
+    S.bannerText = t("st_done"); S.bannerN++;
+    S.msg = t("st_soon"); S.msgT = 6;
+    sfx("wave", 0.9);
+    if (NET.role === "client") this.saveHeroNow();
+    this.time.delayedCall(7000, () => this.toMenu());
+  }
+  saveHeroNow() { saveHero({ level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } }); }
   saveCamp(camp: number) {
     const sv: StorySave = { ch: 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } };
     saveStory(sv);
@@ -871,6 +1026,7 @@ class Game extends Phaser.Scene {
   /** сюжет: погиб — назад в последний лагерь (или к дому) */
   storyDeath() {
     S.msg = t("st_dead"); S.msgT = 3;
+    if (NET.role === "client") return; // гостя вернёт хозяин (пришлёт новый «hi»)
     this.time.delayedCall(2600, () => this.scene.restart());
   }
   /** из паузы — в главное меню (сетевая игра закрывается) */
@@ -1645,7 +1801,7 @@ class Game extends Phaser.Scene {
     this.player.body.setTint(0x777777); this.player.head.setTint(0x777777);
     this.player.back.clear(); this.player.front.clear();
     this.aimG.clear();
-    if (NET.role === "solo") { S.over = true; sfx("over"); return; }
+    if (NET.role === "solo" && !this.mates.size) { S.over = true; sfx("over"); return; }
     // в кооперативе — выбыл до следующей волны, игра идёт, пока жив хоть кто-то
     this.dead = true;
     sfx("hurt");
@@ -1707,7 +1863,7 @@ class Game extends Phaser.Scene {
       it.img.setVisible(it.life > 5 || Math.sin(it.life * 16) > -0.3); // скоро исчезнет — мигает
       // подбирают: свой герой; у хозяина ещё и гости (им отправляется подарок)
       if (NET.role !== "client" && it.vz === 0 && it.life > 0) for (const m of this.mates.values()) {
-        if (m.dead || Math.hypot(it.x - m.x, it.y - m.y) > 24) continue;
+        if (m.dead || m.bot || Math.hypot(it.x - m.x, it.y - m.y) > 24) continue;
         if (it.kind === "medkit" && m.med < MAX_MED) { m.med++; send({ t: "give", k: "medkit" }, m.id); it.life = 0; break; }
         if (it.kind === "grenade" && m.gren < MAX_GREN) { m.gren++; send({ t: "give", k: "grenade" }, m.id); it.life = 0; break; }
         if (it.kind === "armor" && m.armor < 100) { m.armor = Math.min(100, m.armor + 50); send({ t: "give", k: "armor" }, m.id); it.life = 0; break; }
@@ -2191,7 +2347,7 @@ class Game extends Phaser.Scene {
 
     // ── враги ──
     if (this.waitHost) { /* ждём хозяина (см. начало update) */ }
-    else if (NET.role === "client") this.clientEnemies(dt);
+    else if (NET.role === "client") { this.clientEnemies(dt); if (S.story) this.storyBench(); }
     else this.hostEnemies(dt, cam);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
@@ -2213,6 +2369,7 @@ class Game extends Phaser.Scene {
     this.player.setArmor(S.armor > 0);
     if (!this.dead) this.player.pose(this.aimA, this.moveA, this.ph, this.moving, this.muzzleT > 0);
     if (!S.over && !this.dead) this.player.flash(this.hurtT > 0);
+    this.updateBots(dt);
     this.updateMates(dt);
     this.netTick(dt);
 
@@ -2387,7 +2544,6 @@ class Game extends Phaser.Scene {
 
   hostGame(again?: string) {
     if (NET.role !== "solo") return;
-    if (S.story) { S.msg = t("st_coop_soon"); S.msgT = 2.5; return; }
     S.msg = again ? t("restoring") : t("creating"); S.msgT = 3;
     netHost(again).then((code) => {
       saveNet({ role: "host", code });
@@ -2472,9 +2628,26 @@ class Game extends Phaser.Scene {
   sendHi(id: string) {
     // имя гостю: то же, что у его фигурки здесь (фигурка заводится сразу, чтобы имя не поменялось)
     const mt = this.mate(id, this.px + 40, this.py + 20);
-    send({ t: "hi", x: Math.round(this.px + 40), y: Math.round(this.py + 20), lt: this.light.t, name: mt.name }, id);
+    send({ t: "hi", x: Math.round(this.px + 40), y: Math.round(this.py + 20), lt: this.light.t, name: mt.name, mode: MODE, hero: S.myName,
+      st: S.story ? { seg: this.seg, camp: this.campDone, gates: this.gates.map((g) => g.open), woke: this.woke, owned: S.owned, end: this.storyEnd } : undefined }, id);
+    // отряд не больше 4: пришёл человек — уходит бот
+    if (S.story) this.fitBots();
   }
   applyHi(m: Record<string, any>) {
+    // хозяин в другом режиме (или начал сюжет заново) — перестраиваем мир под него
+    const mode = m.mode === "story" ? "story" : "waves";
+    if (mode !== MODE || (mode === "story" && syncedHi !== m)) { MODE = mode; syncedHi = m; pendingHi = m; this.scene.restart(); return; }
+    if (m.hero) S.hero = String(m.hero).slice(0, 16);
+    if (S.story && m.st) {
+      const st = m.st;
+      this.seg = st.seg | 0; this.storyEnd = !!st.end;
+      if (Array.isArray(st.camp)) this.campDone = CAMPS.map((_, k) => !!st.camp[k]);
+      if (Array.isArray(st.woke)) this.woke = GROUPS.map((_, k) => !!st.woke[k]);
+      if (Array.isArray(st.gates)) st.gates.forEach((o: boolean, k: number) => { if (o) this.openGate(k, false); });
+      if (Array.isArray(st.owned)) S.owned = S.owned.map((o, k) => o || !!st.owned[k]);
+      S.wave = this.seg + 1;
+      S.bannerText = this.seg > 0 ? t("st_seg", { n: this.seg + 1 }) : t("st_ch1"); S.bannerN++;
+    }
     const p = this.collide(m.x, m.y, 10);
     this.px = p.x; this.py = p.y;
     this.light.t = m.lt;
@@ -2551,8 +2724,13 @@ class Game extends Phaser.Scene {
     if (NET.role === "host") {
       if (m.t === "in") {
         const mt = this.mate(from, m.x, m.y);
+        // гость ещё в другом мире (перестраивается под наш режим) — его место не считаем
+        if ((m.md ?? "waves") !== MODE) { mt.seen = performance.now(); return; }
         this.mateTarget(mt, m.x, m.y);
         Object.assign(mt, { aimA: m.aimA, moveA: m.moveA, ph: m.ph, moving: m.moving, gren: m.gren, w: (m.w | 0) % SLOTS.length, med: m.med | 0, seen: performance.now() });
+        // макс. здоровье гостя растёт с его уровнем
+        const mh = Phaser.Math.Clamp(m.mh | 0, 100, 200);
+        if (mh > (mt.mh ?? 100)) { if (!mt.dead) mt.hp += mh - (mt.mh ?? 100); mt.mh = mh; }
       } else if (m.t === "shot") {
         const mt = this.mates.get(from);
         const w = WEAPONS[m.w as WeaponId];
@@ -2570,7 +2748,7 @@ class Game extends Phaser.Scene {
         if (mt && nm) { mt.name = nm; mt.label.setText(nm); }
       } else if (m.t === "heal") {
         const mt = this.mates.get(from);
-        if (mt && !mt.dead) mt.hp = Math.min(S.maxHp, mt.hp + MED_HEAL);
+        if (mt && !mt.dead) mt.hp = Math.min(mt.mh ?? 100, mt.hp + MED_HEAL);
       } else if (m.t === "chat") {
         const who = this.mates.get(from)?.name ?? t("player");
         const text = String(m.text ?? "").slice(0, 120);
@@ -2596,6 +2774,10 @@ class Game extends Phaser.Scene {
       case "prop": { const p = this.props.find((q) => q.id === m.id); if (p) this.breakProp(p, true); break; }
       case "spit": { this.spawnSpit(m.x, m.y, m.z, m.vx, m.vy, m.vz, true); const e = this.enemies.find((q) => q.id === m.id); if (e?.hum) e.hum.recoil = 0.25; sfx("splat", this.near(m.x, m.y) * 0.8); break; }
       case "hurt": this.hurtPlayer(m.dmg, true); break;
+      case "gate": if (S.story) this.openGate(m.k | 0, true); break;
+      case "camp": if (S.story && CAMPS[m.i | 0]) this.campReached(m.i | 0); break;
+      case "stend": if (S.story) this.storyDone(); break;
+      case "tp": { const q = this.collide(Number(m.x), Number(m.y), 10); this.px = q.x; this.py = q.y; break; }
       case "give":
         if (m.k === "grenade") { S.grenades++; sfx("pickup"); S.msg = t("got_nade"); }
         else if (m.k === "armor") { sfx("armor"); S.msg = t("got_armor"); }
@@ -2619,7 +2801,7 @@ class Game extends Phaser.Scene {
   netTick(dt: number) {
     const now = performance.now();
     // пропал без «до свидания» (закрыл вкладку, отвалилась сеть) — через 6 с считаем ушедшим
-    if (NET.role === "host") for (const m of [...this.mates.values()]) if (now - m.seen > 6000) { netDrop(m.id); NET.onLeave(m.id); }
+    if (NET.role === "host") for (const m of [...this.mates.values()]) if (!m.bot && now - m.seen > 6000) { netDrop(m.id); NET.onLeave(m.id); }
     if (NET.role === "client" && this.lastSnap && now - this.lastSnap > 6000) { this.lastSnap = 0; this.hostLost(); return; }
     if (NET.role === "host" && NET.conns.size) {
       this.snapT -= dt;
@@ -2637,7 +2819,7 @@ class Game extends Phaser.Scene {
       if (this.inT > 0) return;
       this.inT = 1 / 30;
       const r2 = (v: number) => Math.round(v * 100) / 100;
-      send({ t: "in", x: this.px | 0, y: this.py | 0, aimA: r2(this.aimA), moveA: r2(this.moveA), ph: r2(this.ph), moving: r2(this.moving), gren: S.grenades, w: S.weapon, med: S.medkits });
+      send({ t: "in", x: this.px | 0, y: this.py | 0, aimA: r2(this.aimA), moveA: r2(this.moveA), ph: r2(this.ph), moving: r2(this.moving), gren: S.grenades, w: S.weapon, med: S.medkits, mh: S.maxHp, md: MODE });
     }
   }
 

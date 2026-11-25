@@ -48,3 +48,13 @@ export function loadStory(): StorySave | null {
 export function saveStory(s: StorySave | null) {
   try { if (s) localStorage.setItem(KEY, JSON.stringify(s)); else localStorage.removeItem(KEY); } catch { /* приватный режим */ }
 }
+
+/** гость в чужом сюжете: его прокачка хранится отдельно и едет с ним в любую игру */
+export interface HeroSave { level: number; xp: number; parts: number; up: Record<string, number> }
+const HERO = "myzombika-hero";
+export function loadHero(): HeroSave | null {
+  try { const s = JSON.parse(localStorage.getItem(HERO) || "null"); return s && typeof s.level === "number" ? s : null; } catch { return null; }
+}
+export function saveHero(s: HeroSave) {
+  try { localStorage.setItem(HERO, JSON.stringify(s)); } catch { /* приватный режим */ }
+}

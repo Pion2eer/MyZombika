@@ -20,6 +20,8 @@ export const settings = {
   shake: true,
   aim: true,
   fs: true,
+  /** сюжет: сколько ботов-напарников (0–3) */
+  bots: 2,
   save() {
     const { save: _s, ...data } = settings; void _s;
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* нет хранилища */ }
@@ -68,6 +70,9 @@ const CSS = `
 .mz input[type=checkbox]{width:22px;height:22px;accent-color:#ffb060}
 .mz .join{display:flex;gap:8px;margin-bottom:10px}.mz .join input{flex:1}.mz .join .btn{width:auto;margin:0;text-align:center}
 .mz p{margin:0 0 10px;line-height:1.45;color:#ddd3bc}
+.mz .squad{display:flex;align-items:center;gap:6px;margin:4px 0 6px}.mz .squad span{flex:1;font-weight:700;color:#ffe2a0}
+.mz .squad button{font:inherit;font-weight:700;color:#f2ead8;background:#2a241a;border:1.5px solid #5a5040;border-radius:8px;padding:6px 10px;cursor:pointer}.mz .squad button.on{background:#4a3c1c;border-color:#ffe2a0;color:#ffe2a0}
+.mz p.note{font-size:12.5px;color:#a89f88}
 .mz.dead{background:radial-gradient(ellipse at center,rgba(60,6,4,.45) 0%,rgba(16,4,3,.9) 75%)}
 .mz .over{text-align:center}
 .mz .over .skull{width:64px;height:64px;margin:0 auto 4px;color:#e04a30;filter:drop-shadow(0 3px 8px rgba(0,0,0,.7))}
@@ -163,6 +168,16 @@ function render() {
     const sv = loadStory();
     if (sv && sv.camp > 0) c.appendChild(btn(`${esc(t("st_continue", { n: sv.camp }))}<small>${esc(t("st_ch1"))}</small>`, () => a.story?.(false), "main", "story"));
     c.appendChild(btn(`${esc(t("st_new"))}<small>${esc(t("st_new_d"))}</small>`, () => a.story?.(true), sv && sv.camp > 0 ? "" : "main", "story"));
+    // отряд: боты вместо недостающих игроков
+    const sq = el("div", { class: "squad" });
+    sq.appendChild(el("span", {}, esc(t("st_squad"))));
+    [0, 1, 2, 3].forEach((n) => {
+      const b = el("button", { class: settings.bots === n ? "on" : "" }, n === 0 ? esc(t("st_solo")) : `+${n}`) as HTMLButtonElement;
+      b.onclick = () => { settings.bots = n; settings.save(); render(); };
+      sq.appendChild(b);
+    });
+    c.appendChild(sq);
+    c.appendChild(el("p", { class: "note" }, esc(t("st_squad_d"))));
     c.appendChild(btn(esc(t("m_back")), () => { page = "main"; render(); }, "", "back"));
   } else if (page === "coop") {
     const c = el("div", { class: "card" });
