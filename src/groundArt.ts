@@ -1,9 +1,9 @@
 // Земля глав сюжета: асфальт, брусчатка, бетон, пашня, вода. Любую плитку можно заменить своей:
-// бесшовный PNG 512×512 в src/tiles/<имя>.png (t_asphalt, t_town, t_factory, t_dam, t_water, t_farm) — пересобрать игру.
+// бесшовный PNG 512×512 в src/tiles/<имя>.png (t_asphalt, t_town, t_factory, t_dam, t_water, t_farm, t_waste, t_junk, t_tunnel) — пересобрать игру.
 // Нарисованные кодом — запасные: шум и швы, чтобы главы заметно отличались и без картинок.
 import Phaser from "phaser";
 
-export const GROUND = ["t_asphalt", "t_town", "t_factory", "t_dam", "t_water", "t_farm"] as const;
+export const GROUND = ["t_asphalt", "t_town", "t_factory", "t_dam", "t_water", "t_farm", "t_waste", "t_junk", "t_tunnel"] as const;
 const FILES = import.meta.glob("./tiles/*.png", { eager: true, import: "default" }) as Record<string, string>;
 
 export function loadGroundFiles(scene: Phaser.Scene) {
@@ -81,6 +81,32 @@ const DRAW: Record<(typeof GROUND)[number], (c: CanvasRenderingContext2D, r: () 
     for (let y = 0; y < S; y += 16) { c.fillStyle = "#5e4428"; c.fillRect(0, y, S, 6); c.fillStyle = "#94704a"; c.fillRect(0, y + 8, S, 3); }
     grain(c, r, 1400, "#a8845a", "#4a3420", 2);
     blot(c, r, 10, "#c8a050", 6, 0.5); // солома
+  },
+  t_waste(c, r) {
+    // сухая потрескавшаяся земля, пыль, клочья мёртвой травы
+    c.fillStyle = "#a08a5e"; c.fillRect(0, 0, S, S);
+    grain(c, r, 2400, "#c8b48a", "#6a5838", 2.2);
+    blot(c, r, 12, "#8a744a", 18, 0.22);
+    blot(c, r, 10, "#b8a070", 14, 0.2);
+    c.strokeStyle = "#5e4c30"; c.lineWidth = 1.2; c.globalAlpha = 0.55;
+    for (let i = 0; i < 14; i++) { let x = r() * S, y = r() * S; c.beginPath(); c.moveTo(x, y); for (let k = 0; k < 4; k++) { x += (r() - 0.5) * 34; y += (r() - 0.5) * 34; c.lineTo(x, y); } c.stroke(); }
+    c.globalAlpha = 1;
+    blot(c, r, 9, "#8a8a4a", 6, 0.55);
+  },
+  t_junk(c, r) {
+    // утоптанная грязь в мазуте, ржавые обрезки, осколки
+    c.fillStyle = "#6a5a44"; c.fillRect(0, 0, S, S);
+    grain(c, r, 2600, "#8a7a60", "#3a3024", 2.4);
+    blot(c, r, 22, "#2a241c", 9, 0.11); // мазут
+    blot(c, r, 12, "#8a4a22", 4, 0.35); // ржавчина
+    grain(c, r, 260, "#a8a8a0", "#5a7a8a", 3.2); // железки и стекло
+  },
+  t_tunnel(c, r) {
+    // тёмный асфальт туннеля, следы шин
+    c.fillStyle = "#38383c"; c.fillRect(0, 0, S, S);
+    grain(c, r, 2600, "#5a5a5e", "#1e1e22", 2);
+    blot(c, r, 16, "#26262a", 10, 0.1);
+    c.fillStyle = "#222226"; c.globalAlpha = 0.35; c.fillRect(S * 0.18, 0, 22, S); c.fillRect(S * 0.66, 0, 22, S); c.globalAlpha = 1;
   },
 };
 

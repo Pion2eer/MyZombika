@@ -240,6 +240,29 @@ const MODELS: Record<string, () => Model> = {
     m.hcyl(4, 14, 9, 18, 5, (d, x) => (x === 13 && d < 4 ? 0xfff0b0 : BLACK), 0.08);
     return m;
   },
+  car_rust: () => car(62, 30, 0x8a5430, { burnt: true }),
+  /** куча металлолома: ржавые листы, трубы, колесо */
+  scrap_pile: () => new Model(30, 26, 16).each((u, v, z, x, y) => {
+    const d = Math.hypot(u / 14, v / 12) + z / 15 + (hash(x >> 1, y >> 1, z >> 1) - 0.5) * 0.35;
+    if (d >= 1) return;
+    const h = hash(x >> 2, y >> 2, z >> 1);
+    return jit(h < 0.3 ? 0x8a4a22 : h < 0.55 ? 0x6a6a66 : h < 0.7 ? 0x3a5a7a : h < 0.85 ? 0xa86a30 : 0x2a2824, x, y, z, 0.3);
+  }),
+  /** старый холодильник: лежит на боку или стоит */
+  fridge: () => new Model(14, 12, 24).box(1, 13, 1, 11, 0, 23, 0xe8e4d8, 0.06).box(1, 13, 0, 1, 0, 23, 0xd0ccc0, 0.04).box(2, 3, 0, 1, 8, 16, 0x8a8a86).box(1, 13, 0, 1, 15, 16, 0x9a968c).box(1, 13, 1, 11, 0, 2, 0x8a5a30, 0.3),
+  /** стиральная машина с круглым люком */
+  washer: () => new Model(14, 14, 16).box(1, 13, 1, 13, 0, 15, 0xe0dcd0, 0.06).each((u, v, z, x, y) => (y === 0 && Math.hypot(u, z - 7) < 4 ? (Math.hypot(u, z - 7) < 3 ? 0x5a7a8a : 0x8a8a86) : z === 14 && v < -3 && Math.abs(u) < 4 ? 0x4a4a48 : undefined)),
+  /** стопка покрышек */
+  tire_stack: () => { const m = new Model(18, 18, 18); for (let k = 0; k < 3; k++) m.cyl(9, 9, 8, k * 6, k * 6 + 5, (d) => (d < 3.5 ? -1 : d > 7.2 ? 0x1a1a18 : 0x2e2c2a), 0.12); return m; },
+  /** груда кирпичей и бетона */
+  rubble: () => new Model(28, 22, 10).each((u, v, z, x, y) => {
+    const d = Math.hypot(u / 13, v / 10) + z / 9 + (hash(x >> 1, y >> 1, z) - 0.5) * 0.4;
+    if (d >= 1) return;
+    const h = hash(x >> 1, y >> 2, z);
+    return jit(h < 0.45 ? 0xa04a30 : h < 0.75 ? 0x9a968c : 0x6e6a62, x, y, z, 0.25);
+  }),
+  /** бетонный отбойник (туннель, шоссе) */
+  jersey: () => new Model(34, 10, 10).each((u, v, z) => (Math.abs(v) < 4.6 - z * 0.25 && Math.abs(u) < 16.5 ? (z % 9 === 4 ? 0xd8c040 : 0xb8b4aa) : undefined)),
   rock_moss: () => new Model(24, 20, 14).each((u, v, z, x, y) => { const d = Math.hypot(u / 11, v / 9, z / 12) + (hash(x >> 2, y >> 2, z >> 2) - 0.5) * 0.25; if (d < 1) return z > 9 && hash(x, y, 7) > 0.4 ? jit(0x6a8a3a, x, y, z, 0.3) : jit(STONE, x, y, z, 0.25); }),
 };
 export const SLICE_PROPS = Object.keys(MODELS);
@@ -251,6 +274,7 @@ export const SLICE_INFO: Record<string, { r: number; low?: boolean }> = {
   hydrant: { r: 5, low: true }, bench: { r: 11, low: true }, trash_bin: { r: 6 }, traffic_light: { r: 5 }, mailbox: { r: 5 },
   pallet: { r: 12 }, gas_cyl: { r: 9 }, toolbox: { r: 7, low: true }, valve: { r: 10, low: true },
   sandbags: { r: 13 }, ammo_crate: { r: 10, low: true }, searchlight: { r: 8 }, rock_moss: { r: 11 },
+  car_rust: { r: 14 }, scrap_pile: { r: 13 }, fridge: { r: 7 }, washer: { r: 7 }, tire_stack: { r: 8 }, rubble: { r: 12, low: true }, jersey: { r: 9 },
 };
 
 const ROT = 8, PXV = 3, DZV = 0.8;

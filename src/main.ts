@@ -9,7 +9,7 @@ import { t, type Key } from "./i18n";
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
-import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
+import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
 import { loadGroundFiles, makeGround } from "./groundArt";
 import { loadArtFiles, objArt, HOUSE_NAMES, ART_K } from "./artFiles";
@@ -22,7 +22,10 @@ import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, ammoVox, 
 
 let W = 3000, H = 3000; // размер мира, px (в сюжете — длинная вертикальная полоса)
 /** в сюжете не ставим деревья и камни на заслоны, в лагеря и у ящиков с оружием */
+/** туннель: скала по бокам прохода (внутрь не ставим ничего) */
+const inRock = (x: number, y: number, r = 0) => !!LANE && y < TUNNEL_Y + r && (x < LANE[0] + r || x > LANE[1] - r);
 function storyFree(x: number, y: number, r: number) {
+  if (inRock(x, y, r + 10)) return false;
   if (GATES.some((g) => Math.abs(y - g) < r + 70)) return false;
   if (CAMPS.some((c) => Math.hypot(x - c.x, y - c.y) < r + 170)) return false;
   if (WEAPON_CRATES.some((c) => Math.hypot(x - c.x, y - c.y) < r + 90)) return false;
@@ -72,7 +75,7 @@ const STOCK_MAX: Partial<Record<WeaponId, number>> = { bazooka: 8, flamer: 250 }
 /** патроны для автомата, дробовика, пистолета: обычные, бронебойные (сквозь броню), зажигательные (поджигают) */
 export const AMMO_MAX = 90;
 /** название текущей главы */
-const chTitle = () => t(`st_ch${CH + 1}` as Key);
+const chTitle = () => t("st_chn", { n: CH + 1, name: t(`st_th_${CHAPTERS[CH].theme}` as Key) });
 /** название оружия на текущем языке */
 export const wname = (id: WeaponId) => t(`w_${id}` as Key);
 /** ячейки 1–4 */
@@ -608,6 +611,9 @@ class Game extends Phaser.Scene {
       town: ["hydrant", "bench", "trash_bin", "traffic_light", "mailbox", "bench", "hydrant", "cone", "sign_post", "trash_bin"],
       factory: ["pallet", "pallet", "gas_cyl", "toolbox", "valve", "valve", "barrier", "cone", "trash_bin", "ammo_crate"],
       dam: ["sandbags", "sandbags", "ammo_crate", "searchlight", "rock_moss", "rock_moss", "barrier", "gas_cyl", "sign_post"],
+      waste: ["rubble", "rubble", "tire_stack", "stump", "rock_moss", "sign_post", "trash_bin", "logs", "gravestone", "rubble"],
+      junk: ["scrap_pile", "scrap_pile", "scrap_pile", "fridge", "washer", "tire_stack", "tire_stack", "pallet", "gas_cyl", "trash_bin", "rubble"],
+      tunnel: ["jersey", "jersey", "cone", "cone", "barrier", "rubble", "trash_bin", "gas_cyl", "sign_post", "tire_stack"],
     }[th];
   }
   seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
@@ -934,7 +940,7 @@ class Game extends Phaser.Scene {
     S.wave = camp + 1;
     S.bannerText = camp > 0 ? t("st_seg", { n: camp + 1, m: SEGS }) : chTitle();
     S.bannerN++;
-    S.msg = camp > 0 ? t("st_go") : CH === 0 ? t("st_radio") : t(`st_in${CH + 1}` as Key, { name: S.hero || t("player") }); S.msgT = camp > 0 ? 3 : 6;
+    S.msg = camp > 0 ? t("st_go") : CH === 0 ? t("st_radio") : t(`st_in_${CHAPTERS[CH].theme}` as Key, { name: S.hero || t("player") }); S.msgT = camp > 0 ? 3 : 6;
     if (camp === 0 && CH === 0) this.time.delayedCall(6500, () => { if (!S.msgT || S.msg === t("st_radio")) { S.msg = t("st_intro", { name: S.hero || t("player") }); S.msgT = 4; } });
     this.fitBots();
   }
@@ -1074,7 +1080,7 @@ class Game extends Phaser.Scene {
       this.strT = rand(8, 13);
       const v = this.cameras.main.worldView, y = v.bottom + 90;
       if (y < H - 60 && this.enemies.filter((e) => !e.dead).length < 12) {
-        const q = this.collide(rand(220, W - 220), y, 11);
+        const q = this.collide(LANE ? rand(LANE[0] + 70, LANE[1] - 70) : rand(220, W - 220), y, 11);
         this.addEnemy(Math.random() < 0.25 ? "runner" : "zombie", q.x, q.y, this.eid++).seg = -1;
       }
     }
@@ -1194,10 +1200,10 @@ class Game extends Phaser.Scene {
     const th = S.story ? CHAPTERS[CH].theme : "farm";
     if (S.story) ground.setTint(CHAPTERS[CH].tint);
     /** деревья по местности: ферма — лиственные, шоссе — сосны, городок — редкие, завод — сухие, плотина — сосны и камни */
-    const TREES: Record<string, string[]> = { farm: ["tree_1", "tree_2", "tree_3", "tree_5", "tree_6", "pine_1", "pine_2"], road: ["pine_1", "pine_2", "pine_1", "tree_5", "dead_tree_1"], town: ["tree_1", "tree_2", "tree_6"], factory: ["dead_tree_1", "dead_tree_2", "pine_2"], dam: ["pine_1", "pine_2", "pine_1", "pine_2", "tree_5"] };
-    const BAND: Record<string, string[]> = { farm: ["pine_1", "pine_2", "tree_1", "tree_5", "pine_1"], road: ["pine_1", "pine_2"], town: ["tree_1", "tree_2", "tree_6", "pine_1"], factory: ["dead_tree_1", "dead_tree_2", "pine_2", "pine_1"], dam: ["pine_1", "pine_2"] };
+    const TREES: Record<string, string[]> = { waste: ["dead_tree_1", "dead_tree_2", "dead_tree_1", "tree_5"], junk: ["dead_tree_1", "dead_tree_2", "tree_6"], tunnel: ["pine_1", "pine_2"], farm: ["tree_1", "tree_2", "tree_3", "tree_5", "tree_6", "pine_1", "pine_2"], road: ["pine_1", "pine_2", "pine_1", "tree_5", "dead_tree_1"], town: ["tree_1", "tree_2", "tree_6"], factory: ["dead_tree_1", "dead_tree_2", "pine_2"], dam: ["pine_1", "pine_2", "pine_1", "pine_2", "tree_5"] };
+    const BAND: Record<string, string[]> = { waste: ["dead_tree_1", "dead_tree_2", "pine_2"], junk: ["pine_1", "dead_tree_2", "pine_2"], tunnel: ["pine_1", "pine_2"], farm: ["pine_1", "pine_2", "tree_1", "tree_5", "pine_1"], road: ["pine_1", "pine_2"], town: ["tree_1", "tree_2", "tree_6", "pine_1"], factory: ["dead_tree_1", "dead_tree_2", "pine_2", "pine_1"], dam: ["pine_1", "pine_2"] };
     /** доли: дерево / камень / сухое дерево */
-    const MIX: Record<string, [number, number]> = { farm: [0.45, 0.85], road: [0.4, 0.8], town: [0.25, 0.55], factory: [0.15, 0.7], dam: [0.35, 0.9] };
+    const MIX: Record<string, [number, number]> = { waste: [0.2, 0.75], junk: [0.15, 0.4], tunnel: [0.5, 0.9], farm: [0.45, 0.85], road: [0.4, 0.8], town: [0.25, 0.55], factory: [0.15, 0.7], dam: [0.35, 0.9] };
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
     if (S.story) this.themeGround(th, rnd);
     // полуразрушенный дом недалеко от старта
@@ -1234,16 +1240,16 @@ class Game extends Phaser.Scene {
     }
     // край мира — стена из ёлок
     for (let t = 0; t < Math.max(W, H); t += 70) {
-      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) if (x <= W && y <= H) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
+      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) if (x <= W && y <= H && !inRock(x, y)) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
     }
     // в сюжете по краям полосы — густой лес (дорога одна)
     if (S.story) for (let y = 60; y < H - 60; y += 46) for (const side of [0, 1]) {
       const x = side ? W - rnd.between(40, 190) : rnd.between(40, 190);
       if (free(x, y, 14)) { const s = rnd.between(110, 150); { if (th === "dam") { const r = rnd.between(60, 100); if (free(x + (side ? -150 : 150), y, r * 0.38)) place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x + (side ? -150 : 150), y, r, r * 0.38, 0); } else place(rnd.pick(BAND[th]), x, y, s, 15, s * 0.42); } }
     }
-    const nTrees = Math.round(140 * (W * H) / 9e6 * (th === "town" || th === "factory" ? 0.7 : 1));
+    const nTrees = Math.round(140 * (W * H) / 9e6 * (th === "town" || th === "factory" ? 0.7 : th === "tunnel" ? 0.08 : 1));
     for (let n = 0, tries = 0; n < nTrees && tries < 5000; tries++) {
-      const x = rnd.between(80, W - 80), y = rnd.between(80, H - 80);
+      const x = rnd.between(80, W - 80), y = th === "tunnel" ? rnd.between(TUNNEL_Y + 60, H - 80) : rnd.between(80, H - 80);
       const kind = rnd.frac();
       if (kind < MIX[th][0]) { if (free(x, y, 18) && !((th === "road" || th === "town") && Math.abs(x - W / 2) < 320)) { const s = rnd.between(110, 150); place(rnd.pick(TREES[th]), x, y, s, 15, s * 0.42); n++; } }
       else if (kind < MIX[th][1]) { const s = rnd.between(55, 110); if (free(x, y, s * 0.38)) { place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x, y, s, s * 0.38, 0); n++; } }
@@ -1252,10 +1258,10 @@ class Game extends Phaser.Scene {
     this.buildProps(rnd, free);
     // мелочь без столкновений
     /** где своя земля (асфальт, плиты, бетон) — трава и цветы не растут */
-    const paved = (x: number) => (th === "road" && Math.abs(x - W / 2) < 300) || (th === "town" && x > 230 && x < W - 230) || (th === "factory" && x > 170 && x < W - 170) || th === "dam";
+    const paved = (x: number) => th === "tunnel" || th === "waste" || (th === "junk" && x > 160 && x < W - 160) || (th === "road" && Math.abs(x - W / 2) < 300) || (th === "town" && x > 230 && x < W - 230) || (th === "factory" && x > 170 && x < W - 170) || th === "dam";
     for (let i = 0; i < Math.round(420 * (W * H) / 9e6); i++) {
       const dx = rnd.between(0, W), dy = rnd.between(0, H);
-      if (inHouse(hs, dx, dy, 10) || (S.story && paved(dx) && rnd.frac() < 0.9)) continue;
+      if (inHouse(hs, dx, dy, 10) || inRock(dx, dy) || (S.story && paved(dx) && rnd.frac() < (th === "waste" ? 0.6 : 0.9))) continue;
       const key = rnd.pick(["grass_1", "grass_2", "grass_1", "flowers_1", "flowers_2", "flowers_3", "bush_red_full", "bush_blue_full", "stone", "stone_2", "grass_2", "flowers_1"]);
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
       this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
@@ -1292,6 +1298,37 @@ class Game extends Phaser.Scene {
       // рельсы
       g.fillStyle(0x5a3a22, 1); for (let y = 0; y < H; y += 26) g.fillRect(cx + 150, y, 70, 9);
       g.fillStyle(0x8a8a86, 1).fillRect(cx + 160, 0, 6, H).fillRect(cx + 204, 0, 6, H);
+    } else if (th === "waste") {
+      band("t_waste", 0, W, 0, H, 0.5);
+      // старая разбитая дорога: куски асфальта с провалами
+      for (let y = 0; y < H; y += rnd.between(160, 320)) { const h = rnd.between(120, 260), ox = rnd.between(-30, 30); band("t_asphalt", cx - 110 + ox, 220, y, h, 0.5).setAlpha(0.6).setTint(0xc8b8a0); y += h; }
+    } else if (th === "junk") {
+      band("t_junk", 150, W - 300, 0, H, 0.5);
+      // сетка-рабица по краям свалки
+      g.lineStyle(2, 0x8a8a86, 0.7);
+      for (const x of [150, W - 150]) { g.lineBetween(x, 0, x, H); for (let y = 0; y < H; y += 60) g.lineBetween(x - 4, y, x + 4, y + 60).lineBetween(x + 4, y, x - 4, y + 60); }
+    } else if (th === "tunnel" && LANE) {
+      const [l0, l1] = LANE;
+      // снаружи у входа — дорога, внутри — тёмный асфальт, по бокам скала
+      band("t_asphalt", l0 + 60, l1 - l0 - 120, TUNNEL_Y, H - TUNNEL_Y, 0.5);
+      band("t_tunnel", l0, l1 - l0, 0, TUNNEL_Y, 0.5);
+      const rock = this.add.graphics().setDepth(-4.6);
+      rock.fillStyle(0x121214, 1).fillRect(0, 0, l0, TUNNEL_Y).fillRect(l1, 0, W - l1, TUNNEL_Y);
+      rock.fillStyle(0x4a4a50, 1).fillRect(l0 - 16, 0, 16, TUNNEL_Y).fillRect(l1, 0, 16, TUNNEL_Y); // стены
+      rock.fillStyle(0x6a6a70, 1).fillRect(l0 - 4, 0, 4, TUNNEL_Y).fillRect(l1, 0, 4, TUNNEL_Y);
+      for (let y = 0; y < TUNNEL_Y; y += 90) rock.fillStyle(0x2a2a2e, 1).fillRect(l0 - 16, y, 12, 3).fillRect(l1 + 4, y, 12, 3); // швы плит
+      // портал: бетонная арка над входом
+      rock.fillStyle(0x7a7a7e, 1).fillRect(l0 - 120, TUNNEL_Y - 30, 120, 30).fillRect(l1, TUNNEL_Y - 30, 120, 30);
+      rock.fillStyle(0x5a5a5e, 1).fillRect(l0 - 120, TUNNEL_Y - 6, 120, 6).fillRect(l1, TUNNEL_Y - 6, 120, 6);
+      // разметка: прерывистая посередине, сплошные у тротуаров
+      g.fillStyle(0xe8d070, 0.75); for (let y = 0; y < H; y += 110) g.fillRect(cx - 4, y, 8, 56);
+      g.fillStyle(0xd8d4c8, 0.6).fillRect(l0 + 40, 0, 5, TUNNEL_Y).fillRect(l1 - 45, 0, 5, TUNNEL_Y);
+      g.fillStyle(0x6a6a6e, 1).fillRect(l0, 0, 34, TUNNEL_Y).fillRect(l1 - 34, 0, 34, TUNNEL_Y); // тротуары
+      // стены — непроходимы, пули в них застревают
+      for (const [x0, x1] of [[0, l0], [l1, W]]) {
+        const cx_ = (x0 + x1) / 2, cy_ = TUNNEL_Y / 2, ex = (x1 - x0) / 2, ey = TUNNEL_Y / 2;
+        this.walls.push({ cx: cx_, cy: cy_, ex, ey, c: 1, s: 0, h: 0, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: cx_ + u * ex, y: cy_ + v * ey })) });
+      }
     } else if (th === "dam") {
       band("t_water", 0, 260, 0, H, 0.6); band("t_water", W - 260, 260, 0, H, 0.6);
       band("t_dam", 260, W - 520, 0, H, 0.55);
@@ -1316,12 +1353,13 @@ class Game extends Phaser.Scene {
     const crate = (x: number, y: number) => { const p = add("crate", x, y, 4, img("crate", x, y, 0.88)); ob(p, 14, { upright: true }); return p; };
     const tires = (x: number, y: number) => { const p = add("tires", x, y, 99, img("tires", x, y, 0.6)); ob(p, 13, { low: true }); };
     // брошенные машины (прямоугольник-препятствие, как стены дома)
-    for (let n = 0, tries = 0; n < 8 && tries < 400; tries++) {
+    const th = S.story ? CHAPTERS[CH].theme : "farm";
+    const nCars = th === "junk" ? 24 : th === "tunnel" ? 16 : th === "road" ? 12 : 8;
+    for (let n = 0, tries = 0; n < nCars && tries < 900; tries++) {
       const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200);
-      if (!free(x, y, 62)) continue;
+      if (!free(x, y, th === "tunnel" ? 70 : 62)) continue;
       // машина — модель из срезов (как герой); поворот кратен 45°, по нему и коробка-препятствие
-      const th = S.story ? CHAPTERS[CH].theme : "farm";
-      const pool = th === "road" ? ["car_red", "car_teal", "car_burnt", "car_police", "van", "bus", "car_burnt"] : th === "town" ? ["car_red", "car_teal", "car_police", "van", "car_burnt"] : ["car_red", "car_teal", "car_burnt", "car_burnt", "van"];
+      const pool = th === "junk" ? ["car_rust", "car_rust", "car_burnt", "car_burnt", "van", "bus", "car_teal"] : th === "tunnel" ? ["car_burnt", "car_burnt", "car_red", "car_teal", "van", "car_police", "bus"] : th === "waste" ? ["car_rust", "car_burnt", "car_rust", "van"] : th === "road" ? ["car_red", "car_teal", "car_burnt", "car_police", "van", "bus", "car_burnt"] : th === "town" ? ["car_red", "car_teal", "car_police", "van", "car_burnt"] : ["car_red", "car_teal", "car_burnt", "car_burnt", "van"];
       const name = rnd.pick(pool), o = SV[name];
       let f = rnd.between(0, 7);
       // нарисованная машина: боком (нос вправо или влево — зеркало) или вдоль (если есть такой ракурс)
@@ -1408,6 +1446,11 @@ class Game extends Phaser.Scene {
       const x = 260 + (i * (W - 520)) / 6 + rnd.between(-30, 30), y = H / 2 + 330 + Math.sin(i * 1.3) * 60;
       if (!free(x, y, 16)) { i++; continue; }
       lamp(x, y, rnd.frac() < 0.3); i++;
+    }
+    // туннель: редкие фонари вдоль стен, многие мигают
+    if (LANE) for (let y = 160, k = 0; y < TUNNEL_Y - 60; y += 150, k++) {
+      const side = k % 2, x = side ? LANE[1] - 22 : LANE[0] + 22;
+      if (free(x, y, 8)) lamp(x, y, rnd.frac() < 0.45);
     }
     // заборы (поломанные пролёты)
     for (let n = 0, tries = 0; n < 6 && tries < 300; tries++) {
@@ -1930,7 +1973,8 @@ class Game extends Phaser.Scene {
     const alive = !S.over;
     // время суток из настроек (у гостя — как у хозяина)
     if (NET.role !== "client" && settings.daynight !== "cycle") L.t = Math.floor(L.t) + (settings.daynight === "day" ? 0.25 : 0.72);
-    if (S.story) L.t = Math.floor(L.t) + 0.07; // глава 1 — утро
+    // сюжет — утро, в туннеле всегда темно
+    if (S.story) L.t = Math.floor(L.t) + (LANE ? 0.75 : 0.07);
     L.shadows = settings.quality !== "low";
     L.setRes(settings.quality === "high" ? 1 : 2);
 

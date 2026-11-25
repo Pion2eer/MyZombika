@@ -8,6 +8,9 @@ export const LANGS = {
 export type Lang = keyof typeof LANGS;
 
 const ru = {
+  st_chn: "Глава {n}. {name}", st_th_farm: "Лес и ферма", st_th_road: "Шоссе", st_th_waste: "Пустырь", st_th_town: "Городок", st_th_junk: "Свалка", st_th_factory: "Завод", st_th_tunnel: "Туннель под Ла-Маншем", st_th_dam: "Плотина",
+  st_in_road: "{name}: шоссе забито брошенными машинами. Держимся вместе", st_in_waste: "{name}: пустырь. Тут не спрятаться — смотрим в оба", st_in_town: "{name}: городок. Тут тихо… слишком тихо",
+  st_in_junk: "{name}: свалка. Под каждой грудой железа может кто-то сидеть", st_in_factory: "{name}: через завод — самый короткий путь к реке", st_in_tunnel: "{name}: туннель под Ла-Маншем. Фонари почти не горят — держитесь света", st_in_dam: "{name}: плотина! Слышу вертолёт… и что-то большое",
   st_continue: "Продолжить · глава {c}, лагерь {n}", st_new: "Новая игра", st_new_d: "Глава 1. Лес и ферма",
   st_ch1: "Глава 1. Лес и ферма", st_seg: "Участок {n} из {m}", st_gate: "Путь закрыт. Осталось врагов: {n}", st_gate_open: "Путь открыт!",
   st_camp: "Лагерь. Игра сохранена. Верстак: рюкзак → Мастерская (U)",
@@ -64,6 +67,9 @@ export type Key = keyof typeof ru;
 type Dict = Partial<Record<Key, string>>; // чего нет в языке — берётся из английского
 
 const en: Record<Key, string> = {
+  st_chn: "Chapter {n}. {name}", st_th_farm: "Forest and farm", st_th_road: "Highway", st_th_waste: "Wasteland", st_th_town: "Small town", st_th_junk: "Junkyard", st_th_factory: "Factory", st_th_tunnel: "The Channel Tunnel", st_th_dam: "The dam",
+  st_in_road: "{name}: the highway is jammed with abandoned cars. Stay together", st_in_waste: "{name}: open wasteland. Nowhere to hide — eyes open", st_in_town: "{name}: a small town. Quiet… too quiet",
+  st_in_junk: "{name}: a junkyard. Anything could be hiding under that scrap", st_in_factory: "{name}: the factory is the shortest way to the river", st_in_tunnel: "{name}: the Channel Tunnel. The lamps are almost dead — stay in the light", st_in_dam: "{name}: the dam! I hear a helicopter… and something big",
   st_continue: "Continue · chapter {c}, camp {n}", st_new: "New game", st_new_d: "Chapter 1. Forest and farm",
   st_ch1: "Chapter 1. Forest and farm", st_seg: "Area {n} of {m}", st_gate: "The way is blocked. Enemies left: {n}", st_gate_open: "The way is open!",
   st_camp: "Camp. Game saved. Workbench: bag → Workshop (U)",
