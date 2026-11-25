@@ -10,7 +10,7 @@ const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).r
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
 import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, loadStory, saveStory, type StorySave } from "./story";
-import { HUD_ART, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
+import { HUD_ART, HUD_FILE, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
@@ -3178,8 +3178,8 @@ class UI extends Phaser.Scene {
     this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch || S.inv ? "" : t("help"));
     // ячейки оружия и рюкзак: внизу по центру (на тачскрине — между стиками, а если тесно — над кнопками справа)
     if (!S.over && !S.inv) {
-      const gap = 6, sh = 44, bag = 44;
-      let sw = 80, bx: number, by: number, lift = 0;
+      const gap = 6, sh = 52, bag = 44;
+      let sw = 84, bx: number, by: number, lift = 0;
       const tot = () => SLOTS.length * sw + SLOTS.length * gap + (S.touch ? bag : 0) - (S.touch ? 0 : gap);
       if (!S.touch) { bx = (w - tot()) / 2; by = h - sh - this.help.height - 16; }
       else if (tot() <= w - 350) { bx = (w - tot()) / 2; by = h - sh - 10; }
@@ -3189,7 +3189,11 @@ class UI extends Phaser.Scene {
         const x = bx + i * (sw + gap), sel = S.weapon === i, W_ = wstat(id);
         g.fillStyle(0x14110d, sel ? 0.8 : 0.5).fillRoundedRect(x, by, sw, sh, 7).lineStyle(2, sel ? 0xffe2a0 : 0xf2ead8, sel ? 0.95 : 0.25).strokeRoundedRect(x, by, sw, sh, 7);
         const am = id === "grenade" ? `×${S.grenades}` : sel && S.reload > 0 ? "…" : `${S.clip[id]}/${W_.mag}`;
-        this.slotT[i].setPosition(x + sw / 2, by + sh / 2).setText(`${S.touch ? "" : `${i + 1} `}${wname(id)}\n${am}`).setFontSize(sw < 70 ? 10 : 12).setColor(sel ? "#ffe2a0" : "#d8d0bc").setVisible(true);
+        // картинка оружия сверху, подпись и патроны снизу
+        const wn = (id === "grenade" && !HUD_FILE("w_grenade") ? "grenade" : "w_" + id) as HudArt, [iw, ih] = HUD_ART[wn], isc = Math.min((sw - 14) / iw, 22 / ih);
+        this.img(wn, x + sw / 2 - (iw * isc) / 2, by + 15, isc, sel ? 1 : 0.75);
+        if (!S.touch) this.txt(`${i + 1}`, x + 5, by + 9, 10, sel ? "#ffe2a0" : "#a89f88");
+        this.slotT[i].setPosition(x + sw / 2, by + sh - 11).setText(`${wname(id)} ${am}`).setFontSize(sw < 70 ? 9 : 10.5).setColor(sel ? "#ffe2a0" : "#d8d0bc").setVisible(true);
         hits.push({ x, y: by, w: sw, h: sh, fn: () => gm.selectWeapon(i) });
       });
       // кнопка «снаряжение» (рюкзак): на компьютере — слева от паузы/чата, на тачскрине — в конце ряда ячеек

@@ -8,12 +8,16 @@ export const HUD_ART = {
   heart: [30, 30], shield: [28, 28], wave: [26, 26], kills: [26, 26], score: [26, 26], sun: [26, 26], moon: [26, 26],
   grenade: [22, 26], medkit: [26, 24], chat: [28, 26], pause: [24, 24], play: [24, 24], bag: [28, 28],
   bullet_rifle: [6, 18], bullet_pistol: [7, 14], shell: [10, 18], bar: [220, 22],
+  /** оружие на панели внизу, вид сбоку */
+  w_rifle: [64, 26], w_shotgun: [64, 22], w_pistol: [36, 26], w_grenade: [24, 28],
 } as const;
 export type HudArt = keyof typeof HUD_ART;
 
 // файлы из src/ui/*.png (Vite вшивает их в сборку)
 const FILES = import.meta.glob("./ui/*.png", { eager: true, import: "default" }) as Record<string, string>;
 const fileOf = (n: string) => FILES[`./ui/${n}.png`];
+/** есть ли картинка-файл (иначе рисуем кодом) */
+export const HUD_FILE = (n: string) => !!fileOf(n);
 
 /** в preload сцены: загрузить картинки-файлы, если они есть */
 export function loadHudFiles(scene: Phaser.Scene) {
@@ -109,6 +113,27 @@ const DRAW: Record<HudArt, (c: C, w: number, h: number) => void> = {
   shell(c) {
     c.beginPath(); c.roundRect(1, 1, 8, 11.5, [3, 3, 0, 0]); c.fillStyle = grad(c, 1, 12, "#ff5a40", "#901a10"); c.fill(); stroke(c, 1.2);
     c.beginPath(); c.rect(1, 12.5, 8, 4.5); c.fillStyle = grad(c, 12, 17, "#ffe680", "#a87a10"); c.fill(); stroke(c, 1.2);
+  },
+  // запасные силуэты оружия (пока нет картинок из src/ui/w_*.png)
+  w_rifle(c) {
+    c.beginPath(); c.moveTo(2, 9); c.lineTo(14, 8); c.lineTo(16, 6); c.lineTo(50, 6); c.lineTo(62, 7); c.lineTo(62, 10); c.lineTo(48, 11); c.lineTo(40, 11);
+    c.lineTo(38, 22); c.lineTo(32, 22); c.lineTo(33, 12); c.lineTo(26, 12); c.lineTo(24, 18); c.lineTo(19, 18); c.lineTo(20, 12); c.lineTo(14, 13); c.lineTo(4, 17); c.lineTo(2, 15); c.closePath();
+    c.fillStyle = grad(c, 6, 22, "#6a6a66", "#2a2a28"); c.fill(); stroke(c, 1.6);
+    c.beginPath(); c.rect(2, 9, 12, 6); c.fillStyle = "#8a5a2a"; c.fill(); stroke(c, 1.2);
+  },
+  w_shotgun(c) {
+    c.beginPath(); c.moveTo(2, 8); c.lineTo(18, 7); c.lineTo(62, 7); c.lineTo(62, 10); c.lineTo(22, 11); c.lineTo(20, 17); c.lineTo(15, 17); c.lineTo(16, 12); c.lineTo(4, 16); c.closePath();
+    c.fillStyle = grad(c, 6, 17, "#5a5a56", "#262624"); c.fill(); stroke(c, 1.6);
+    c.beginPath(); c.rect(2, 8, 14, 6); c.rect(34, 10, 14, 5); c.fillStyle = "#9a6430"; c.fill(); stroke(c, 1.2);
+  },
+  w_pistol(c) {
+    c.beginPath(); c.moveTo(3, 4); c.lineTo(34, 4); c.lineTo(34, 11); c.lineTo(16, 11); c.lineTo(13, 24); c.lineTo(5, 24); c.lineTo(8, 11); c.lineTo(3, 11); c.closePath();
+    c.fillStyle = grad(c, 4, 24, "#5a5a58", "#1e1e1c"); c.fill(); stroke(c, 1.6);
+  },
+  w_grenade(c) {
+    c.beginPath(); c.ellipse(12, 17, 8.5, 9.5, 0, 0, Math.PI * 2); c.fillStyle = grad(c, 7, 27, "#8a9a4a", "#3a4a1a"); c.fill(); stroke(c, 1.8);
+    c.beginPath(); c.rect(9, 4, 6, 5); c.fillStyle = "#9a9a92"; c.fill(); stroke(c, 1.4);
+    c.beginPath(); c.arc(19, 6, 3, 0, Math.PI * 2); c.lineWidth = 1.4; c.strokeStyle = "#c8b060"; c.stroke();
   },
   bar(c, w, h) {
     // рамка полоски здоровья: тёмный жёлоб с латунной окантовкой (заливку рисует игра поверх)
