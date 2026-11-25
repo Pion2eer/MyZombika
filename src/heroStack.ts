@@ -432,3 +432,26 @@ export function torsoOf(m: Vox, cut: number): Vox {
   const per = m.n * m.n;
   return { n: m.n, z: m.z - cut, z0: m.z0, c: m.c.slice(cut * per) };
 }
+
+/** Ящик патронов (крышка с полосой) или канистра (fuel): для бронебойных, зажигательных, ракет, топлива. */
+export function ammoVox(body: number, stripe: number, can = false): Vox {
+  const m = newVox(0, can ? 12 : 8);
+  const dk = ((body >> 1) & 0x7f7f7f);
+  fill(m, (u, v, z) => {
+    const au = Math.abs(u), av = Math.abs(v);
+    if (can) {
+      if (au < 5 && av < 3 && z <= 9) return (au > 4.2 || av > 2.2) && (z === 0 || z === 9) ? dk : z === 5 ? stripe : body;
+      if (z >= 10 && z <= 11 && u > 1 && u < 3.5 && av < 1) return 0x2a2a2a; // горлышко
+      if (z === 10 && u < 0 && u > -4 && av < 0.8) return dk; // ручка
+      return -1;
+    }
+    if (au < 6.5 && av < 4 && z <= 5) {
+      if (z === 5 && au < 4.5 && av < 1.3) return stripe;
+      if (z >= 2 && z <= 3 && av > 3.2 && au < 3) return stripe;
+      return (au > 5.8 || av > 3.3) && (z === 0 || z === 5) ? dk : body;
+    }
+    if (z === 6 && av < 0.7 && au < 2.5) return 0x2a2a2a;
+    return -1;
+  });
+  return m;
+}

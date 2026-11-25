@@ -9,7 +9,7 @@ export const HUD_ART = {
   grenade: [22, 26], medkit: [26, 24], chat: [28, 26], pause: [24, 24], play: [24, 24], bag: [28, 28],
   bullet_rifle: [6, 18], bullet_pistol: [7, 14], shell: [10, 18], bar: [220, 22],
   /** оружие на панели внизу, вид сбоку */
-  w_rifle: [64, 26], w_shotgun: [64, 22], w_pistol: [36, 26], w_grenade: [24, 28],
+  w_rifle: [64, 26], w_shotgun: [64, 22], w_pistol: [36, 26], w_grenade: [24, 28], w_bazooka: [66, 24], w_flamer: [64, 26], w_saw: [64, 26],
 } as const;
 export type HudArt = keyof typeof HUD_ART;
 
@@ -134,6 +134,24 @@ const DRAW: Record<HudArt, (c: C, w: number, h: number) => void> = {
     c.beginPath(); c.ellipse(12, 17, 8.5, 9.5, 0, 0, Math.PI * 2); c.fillStyle = grad(c, 7, 27, "#8a9a4a", "#3a4a1a"); c.fill(); stroke(c, 1.8);
     c.beginPath(); c.rect(9, 4, 6, 5); c.fillStyle = "#9a9a92"; c.fill(); stroke(c, 1.4);
     c.beginPath(); c.arc(19, 6, 3, 0, Math.PI * 2); c.lineWidth = 1.4; c.strokeStyle = "#c8b060"; c.stroke();
+  },
+  w_bazooka(c) {
+    c.beginPath(); c.roundRect(2, 6, 62, 10, 4); c.fillStyle = grad(c, 6, 16, "#7a8a48", "#3a4420"); c.fill(); stroke(c, 1.6);
+    c.beginPath(); c.rect(0.8, 4.5, 6, 13); c.rect(54, 4.5, 9, 13); c.fillStyle = "#3a4420"; c.fill(); stroke(c, 1.4);
+    c.beginPath(); c.rect(24, 16, 5, 7); c.rect(36, 16, 5, 6); c.fillStyle = "#2a2a28"; c.fill(); stroke(c, 1.2);
+    c.beginPath(); c.rect(30, 2, 6, 4); c.fillStyle = "#2a2a28"; c.fill(); stroke(c, 1.1);
+  },
+  w_flamer(c) {
+    c.beginPath(); c.roundRect(4, 13, 30, 10, 4); c.fillStyle = grad(c, 13, 23, "#e05a40", "#8a1a10"); c.fill(); stroke(c, 1.6);
+    c.beginPath(); c.moveTo(2, 9); c.lineTo(30, 7); c.lineTo(58, 8); c.lineTo(58, 12); c.lineTo(30, 12); c.lineTo(20, 13); c.lineTo(4, 14); c.closePath();
+    c.fillStyle = grad(c, 7, 14, "#9a9a92", "#3a3a38"); c.fill(); stroke(c, 1.5);
+    c.beginPath(); c.arc(60, 10, 3, 0, Math.PI * 2); c.fillStyle = "#60a0ff"; c.fill(); stroke(c, 1.1);
+  },
+  w_saw(c) {
+    c.beginPath(); c.roundRect(2, 7, 22, 16, 4); c.fillStyle = grad(c, 7, 23, "#ffa040", "#b0501a"); c.fill(); stroke(c, 1.6);
+    c.beginPath(); c.roundRect(22, 10, 40, 9, 4.5); c.fillStyle = grad(c, 10, 19, "#d8d8d0", "#7a7a72"); c.fill(); stroke(c, 1.5);
+    c.fillStyle = OUT; for (let x = 25; x < 60; x += 4) { c.fillRect(x, 8.4, 2, 1.8); c.fillRect(x + 2, 18.8, 2, 1.8); }
+    c.beginPath(); c.moveTo(6, 7); c.quadraticCurveTo(13, 0, 20, 7); c.lineWidth = 2.4; c.strokeStyle = OUT; c.stroke();
   },
   bar(c, w, h) {
     // рамка полоски здоровья: тёмный жёлоб с латунной окантовкой (заливку рисует игра поверх)

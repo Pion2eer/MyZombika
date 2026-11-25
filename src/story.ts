@@ -5,12 +5,13 @@ import type { Kind } from "./main";
 
 /** Пять глав «Дорога на север». Каждая — своя местность (земля, деревья, предметы), длина и враги. */
 export type Theme = "farm" | "road" | "town" | "factory" | "dam";
-export interface ChapterDef { theme: Theme; segs: number; tint: number; weapon?: { slot: number; seg: number }; boss?: boolean }
+/** weapons — ящики с оружием: номер ячейки (0 автомат, 1 дробовик, 4 базука, 5 огнемёт, 6 пила) и участок */
+export interface ChapterDef { theme: Theme; segs: number; tint: number; weapons?: { slot: number; seg: number }[]; boss?: boolean }
 export const CHAPTERS: ChapterDef[] = [
-  { theme: "farm", segs: 4, tint: 0xffffff, weapon: { slot: 1, seg: 1 } }, // дробовик
-  { theme: "road", segs: 4, tint: 0xe6dcc0, weapon: { slot: 0, seg: 0 } }, // автомат
-  { theme: "town", segs: 5, tint: 0xc8ccc4 },
-  { theme: "factory", segs: 5, tint: 0xb8b0a0 },
+  { theme: "farm", segs: 4, tint: 0xffffff, weapons: [{ slot: 1, seg: 1 }, { slot: 6, seg: 3 }] }, // дробовик, бензопила
+  { theme: "road", segs: 4, tint: 0xe6dcc0, weapons: [{ slot: 0, seg: 0 }] }, // автомат
+  { theme: "town", segs: 5, tint: 0xc8ccc4, weapons: [{ slot: 4, seg: 2 }] }, // базука
+  { theme: "factory", segs: 5, tint: 0xb8b0a0, weapons: [{ slot: 5, seg: 1 }] }, // огнемёт
   { theme: "dam", segs: 5, tint: 0xb8ccd0, boss: true },
 ];
 const SEGL = 2300;
@@ -47,7 +48,10 @@ export function setChapter(ch: number) {
     const d = CH + k * 0.4;
     for (let i = 0; i < 4; i++) {
       const y = y0 + ((y1 - y0) * (i + 0.5)) / 4, x = 380 + rnd() * (STORY_W - 760), last = i === 3;
-      const kinds: Kind[] = [...z(3 + d * 1.1 + i), ...(d > 0.3 ? z(1 + d * 0.6, "runner") : [])];
+      const kinds: Kind[] = [...z(4 + d * 1.4 + i), ...(d > 0.3 ? z(1 + d * 0.8, "runner") : [])];
+      if (d > 0.4 && rnd() < 0.55) kinds.push(...z(1 + d * 0.3, "bloater"));
+      if (d > 0.8 && (last || rnd() < 0.6)) kinds.push(...z(1 + d * 0.45, "armored"));
+      if (d > 1.6 && (last || rnd() < 0.35)) kinds.push(...z(d * 0.25, "brute"));
       if (CH <= 1 && rnd() < 0.5) kinds.push(...z(2 + rnd() * 3, "rat"));
       if (d > 0.7 && rnd() < 0.6) kinds.push(...z(1 + d * 0.3, "hyena"));
       if (d > 1.2 && (last || rnd() < 0.4)) kinds.push(...z(1 + d * 0.25, "spitter"));
@@ -57,8 +61,8 @@ export function setChapter(ch: number) {
     }
   }
   // финал: «Хозяин» у плотины
-  if (C.boss) GROUPS.push({ seg: C.segs - 1, x: STORY_W / 2, y: EXIT_Y + 420, kinds: ["bear", "spitter", "spitter", "panther", "panther"], boss: true });
-  WEAPON_CRATES = C.weapon ? [{ x: 1180, y: (C.weapon.seg === 0 ? STORY_H - 1500 : GATES[C.weapon.seg - 1] - 900), slot: C.weapon.slot }] : [];
+  if (C.boss) GROUPS.push({ seg: C.segs - 1, x: STORY_W / 2, y: EXIT_Y + 420, kinds: ["bear", "brute", "armored", "armored", "spitter", "spitter", "panther", "bloater"], boss: true });
+  WEAPON_CRATES = (C.weapons ?? []).map((w, i) => ({ x: i % 2 ? 420 : 1180, y: w.seg === 0 ? STORY_H - 1500 : GATES[w.seg - 1] - 900, slot: w.slot }));
 }
 setChapter(0);
 
@@ -67,6 +71,8 @@ export interface StorySave {
   owned: boolean[]; clip: Record<string, number>; weapon: number; kills: number; score: number; time: number;
   /** прокачка (с 0.12) */
   level?: number; xp?: number; parts?: number; up?: Record<string, number>;
+  /** спецпатроны и запас ракет/топлива (с 0.15) */
+  ap?: number; inc?: number; stock?: Record<string, number>;
 }
 const KEY = "myzombika-story";
 export function loadStory(): StorySave | null {

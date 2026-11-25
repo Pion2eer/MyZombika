@@ -2,7 +2,7 @@
 export type Sfx =
   | "shot" | "casing" | "empty" | "reload" | "hit" | "splat" | "gore" | "thunk" | "ricochet"
   | "step" | "hurt" | "groan" | "growl" | "squeak" | "roar" | "wave" | "over"
-  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate" | "beat" | "cricket" | "bird" | "thunder";
+  | "boom" | "pin" | "pickup" | "heal" | "bounce" | "shotgun" | "pistol" | "pump" | "swap" | "armor" | "clang" | "crate" | "beat" | "cricket" | "bird" | "thunder" | "rocket" | "flame" | "saw";
 
 let ctx: AudioContext | null = null;
 let out: GainNode | null = null;
@@ -10,7 +10,7 @@ let noiseBuf: AudioBuffer | null = null;
 let muted = false;
 const last: Partial<Record<Sfx, number>> = {};
 /** не чаще, чем раз в N секунд (иначе каша из одинаковых звуков) */
-const GAP: Partial<Record<Sfx, number>> = { clang: 0.05, crate: 0.08, hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
+const GAP: Partial<Record<Sfx, number>> = { clang: 0.05, crate: 0.08, hit: 0.03, splat: 0.04, casing: 0.05, thunk: 0.05, ricochet: 0.08, swap: 0.05,  bounce: 0.08, boom: 0.05, flame: 0.09, saw: 0.09, empty: 0.25, groan: 0.35, growl: 0.4, squeak: 0.2 };
 
 let volume = 0.9;
 export function toggleMute() { muted = !muted; if (out) out.gain.value = muted ? 0 : volume; return muted; }
@@ -227,6 +227,19 @@ export function sfx(kind: Sfx, vol = 1) {
       noise(t, 0.14, 0.75 * v, "lowpass", 4200, 700);
       tone(t, 0.18, 0.6 * v, "sine", 120, 35);
       noise(t + 0.03, 0.45, 0.15 * v, "lowpass", 1000, 200);
+      break;
+    case "rocket": // базука: хлопок и шипение ракеты
+      noise(t, 0.1, 0.7 * v, "lowpass", 3000, 600);
+      tone(t, 0.25, 0.5 * v, "sine", 80, 40);
+      noise(t + 0.02, 0.6, 0.3 * v, "bandpass", 2600, 1200, 1.2, 0.05);
+      break;
+    case "flame": // огнемёт: гул пламени
+      noise(t, 0.16, 0.3 * v, "lowpass", 900, 500, 0.8, 0.02);
+      noise(t, 0.12, 0.08 * v, "bandpass", 3000, 2200, 1.5, 0.02);
+      break;
+    case "saw": // бензопила: рычащий мотор и визг цепи
+      tone(t, 0.12, 0.22 * v, "sawtooth", rnd(95, 115), rnd(120, 140), 0.005, 1800);
+      noise(t, 0.1, 0.12 * v, "bandpass", 3200, 2800, 3, 0.005);
       break;
     case "pistol":
       noise(t, 0.06, 0.4 * v, "lowpass", 6500, 1500);
