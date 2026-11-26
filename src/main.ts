@@ -11,8 +11,9 @@ import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
 import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
-import { loadGroundFiles, makeGround, HAS_GRASS } from "./groundArt";
+import { loadGroundFiles, makeGround, makeGroundPatches, HAS_GRASS } from "./groundArt";
 import { loadArtFiles, objArt, HOUSE_NAMES, ART_K, OBJ_K, BUILD_NAMES, buildK } from "./artFiles";
+const BUILD_K_SMALL = (n: string) => buildK(n) !== ART_K;
 import { HUD_ART, HUD_FILE, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
 import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
@@ -24,8 +25,11 @@ let W = 3000, H = 3000; // размер мира, px (в сюжете — дли
 /** в сюжете не ставим деревья и камни на заслоны, в лагеря и у ящиков с оружием */
 /** туннель: скала по бокам прохода (внутрь не ставим ничего) */
 const inRock = (x: number, y: number, r = 0) => !!LANE && y < TUNNEL_Y + r && (x < LANE[0] + r || x > LANE[1] - r);
+/** пашни фермы: на них ничего не ставим (вокруг — заборчик) */
+let FIELDS: { x: number; y: number; w: number; h: number }[] = [];
+const inField = (x: number, y: number, r: number) => FIELDS.some((f) => x > f.x - r - 34 && x < f.x + f.w + r + 34 && y > f.y - r - 40 && y < f.y + f.h + r + 30);
 function storyFree(x: number, y: number, r: number) {
-  if (inRock(x, y, r + 10)) return false;
+  if (inRock(x, y, r + 10) || inField(x, y, r)) return false;
   if (GATES.some((g) => Math.abs(y - g) < r + 70)) return false;
   if (CAMPS.some((c) => Math.hypot(x - c.x, y - c.y) < r + 170)) return false;
   if (WEAPON_CRATES.some((c) => Math.hypot(x - c.x, y - c.y) < r + 90)) return false;
@@ -569,6 +573,7 @@ class Game extends Phaser.Scene {
   walls: WallBox[] = [];
   /** тени нарисованных построек и машин: картинка и сплющенность силуэта */
   artSh: [Phaser.GameObjects.Image, number][] = [];
+  yards: { x: number; y: number; w: number; h: number; path: boolean }[] = [];
   bullets: Bullet[] = [];
   bg!: Phaser.GameObjects.Graphics;
   aimG!: Phaser.GameObjects.Graphics;
@@ -644,6 +649,7 @@ class Game extends Phaser.Scene {
     makePropArt(this);
     SV = makeSliceProps(this);
     makeGround(this);
+    makeGroundPatches(this);
     this.enemies = []; this.obs = []; this.artSh = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
     makeStack(this, "hero_head", PAL_HERO, "head");
@@ -1208,6 +1214,7 @@ class Game extends Phaser.Scene {
     /** доли: дерево / камень / сухое дерево */
     const MIX: Record<string, [number, number]> = { waste: [0.2, 0.75], junk: [0.15, 0.4], tunnel: [0.5, 0.9], farm: [0.45, 0.85], road: [0.4, 0.8], town: [0.25, 0.55], factory: [0.15, 0.7], dam: [0.35, 0.9] };
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
+    FIELDS = [];
     if (S.story) this.themeGround(th, rnd);
     // полуразрушенный дом недалеко от старта
     const st = S.story ? START : { x: W / 2, y: H / 2 };
@@ -1217,6 +1224,8 @@ class Game extends Phaser.Scene {
     const free = (x: number, y: number, r: number) =>
       Math.hypot(x - st.x, y - st.y) > 220 && (!S.story || storyFree(x, y, r)) && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
       !(x > hs.bx0 - r - 40 && x < hs.bx1 + r + 40 && y > hs.by0 - r - 50 && y < hs.by1 + r + 30);
+    /** дворы: дома, постройки, костры — под ними проплешина земли, к ним ведут тропинки */
+    const yards = this.yards = [{ x: hs.cx, y: hs.by1 + 10, w: hs.bx1 - hs.bx0 + 60, h: 90, path: true as boolean }];
     const place = (key: string, x: number, y: number, size: number, r: number, canopy: number) => {
       const img = this.add.image(x, y, key).setDisplaySize(size, size).setDepth(y);
       // дерево нарисовано «вид сверху-сбоку»: ставим картинку основанием ствола в точку (x, y)
@@ -1235,6 +1244,7 @@ class Game extends Phaser.Scene {
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
         this.artSh.push([im, 0.55]);
+        yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
         this.walls.push(p.wall);
@@ -1268,6 +1278,7 @@ class Game extends Phaser.Scene {
         const im = this.add.image(x, y, "bd_" + name).setDisplaySize(w, h).setFlipX(flip);
         const p: Prop = { id: 6000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         if (flat) { im.setDepth(-9); n++; continue; }
+        yards.push({ x, y: y + h * (tall ? 0.02 : 0.12), w: w * (tall ? 1.6 : 1.05), h: h * (tall ? 0.35 : 0.6), path: !BUILD_K_SMALL(name) });
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
@@ -1315,6 +1326,97 @@ class Game extends Phaser.Scene {
   }
 
   /** земля главы поверх травы: дорога, площадь, цех, плотина, поля */
+  /** пашня с неровным краем: узор t_farm внутри извилистого контура, по краю — бровка и травинки */
+  fieldImage(i: number, x: number, y: number, w: number, h: number, rnd: Phaser.Math.RandomDataGenerator) {
+    const m = 16, key = "field_" + i;
+    if (this.textures.exists(key)) this.textures.remove(key);
+    const cv = document.createElement("canvas"); cv.width = w + m * 2; cv.height = h + m * 2;
+    const c = cv.getContext("2d")!;
+    // контур: точки по скруглённому прямоугольнику, сдвинутые наружу/внутрь плавным шумом
+    const pts: [number, number][] = [], n = Math.round((w + h) / 9), rr = Math.min(w, h) * 0.22, ph = [rnd.realInRange(0, 9), rnd.realInRange(0, 9)];
+    for (let k = 0; k < n; k++) {
+      const t = (k / n) * 2 * (w + h);
+      let px: number, py: number, nx: number, ny: number;
+      if (t < w) { px = t; py = 0; nx = 0; ny = -1; } else if (t < w + h) { px = w; py = t - w; nx = 1; ny = 0; } else if (t < 2 * w + h) { px = 2 * w + h - t; py = h; nx = 0; ny = 1; } else { px = 0; py = 2 * (w + h) - t; nx = -1; ny = 0; }
+      // скругление углов: подтягиваем к центру скругления
+      const cxr = Math.min(Math.max(px, rr), w - rr), cyr = Math.min(Math.max(py, rr), h - rr), dx = px - cxr, dy = py - cyr, d = Math.hypot(dx, dy);
+      if (d > rr) { px = cxr + (dx / d) * rr; py = cyr + (dy / d) * rr; }
+      const wob = Math.sin(t * 0.021 + ph[0]) * 7 + Math.sin(t * 0.067 + ph[1]) * 3.5 + rnd.realInRange(-1.5, 1.5);
+      pts.push([m + px + nx * wob, m + py + ny * wob]);
+    }
+    const path = () => { c.beginPath(); pts.forEach(([a, b], k) => (k ? c.lineTo(a, b) : c.moveTo(a, b))); c.closePath(); };
+    const src = this.textures.get("t_farm").getSourceImage() as CanvasImageSource & { width: number };
+    const pat = c.createPattern(src, "repeat")!;
+    const sc = 0.45 * (512 / Math.max(256, src.width as number)) * (src.width as number >= 512 ? 1 : 2);
+    pat.setTransform(new DOMMatrix().scale(sc));
+    path(); c.fillStyle = pat; c.fill();
+    // бровка: тёмная полоса по краю внутри
+    c.save(); path(); c.clip(); c.lineWidth = 10; c.strokeStyle = "rgba(60,40,20,0.35)"; path(); c.stroke(); c.restore();
+    // травинки, налезающие на край
+    c.strokeStyle = "rgba(70,120,30,0.85)"; c.lineWidth = 1.5;
+    for (let k = 0; k < pts.length; k += 1) for (let j = 0; j < 2; j++) {
+      const [a, b] = pts[k], ox = rnd.realInRange(-4, 4), oy = rnd.realInRange(-4, 4);
+      c.beginPath(); c.moveTo(a + ox, b + oy); c.lineTo(a + ox + rnd.realInRange(-3, 3), b + oy - rnd.realInRange(4, 9)); c.stroke();
+    }
+    this.textures.addCanvas(key, cv);
+    this.add.image(x - m, y - m, key).setOrigin(0).setDepth(-9.6);
+  }
+  /** живая земля: проплешины под дворами, кривые тропинки, пятна тёмной/сухой травы, цветы кучками */
+  groundPatches(th: string, yards: { x: number; y: number; w: number; h: number; path: boolean }[], rnd: Phaser.Math.RandomDataGenerator) {
+    if (th === "tunnel") return;
+    const tint = S.story ? CHAPTERS[CH].tint : 0xffffff;
+    const blob = (key: string, x: number, y: number, w: number, h: number, depth = -9.9) =>
+      this.add.image(x, y, key).setDisplaySize(w, h).setRotation(rnd.realInRange(-0.3, 0.3)).setFlipX(rnd.frac() < 0.5).setDepth(depth).setTint(tint);
+    // под домами и кострами — вытоптанная земля
+    for (const y of yards) blob("gp_dirt" + rnd.between(0, 3), y.x + rnd.between(-8, 8), y.y, y.w * 1.3, y.h * 1.5);
+    // тропинки: плавная кривая (Безье со смещёнными в стороны опорами), три слоя — тень края, земля, светлая середина
+    const g = this.add.graphics().setDepth(-9.85);
+    const trail = (pts: { x: number; y: number }[], wid: number) => {
+      for (const [k, col, a] of [[1.5, 0x4a3a20, 0.16], [1.0, 0x7a5e3a, 0.6], [0.5, 0x9c7e54, 0.45]] as const) {
+        g.lineStyle(wid * k, col, a).strokePoints(pts, false);
+      }
+      // камешки по тропе
+      g.fillStyle(0x9a9284, 0.8);
+      for (let i = 0; i < pts.length; i += 3) if (rnd.frac() < 0.5) g.fillEllipse(pts[i].x + rnd.between(-wid / 3, wid / 3), pts[i].y + rnd.between(-wid / 3, wid / 3), rnd.between(2, 5), rnd.between(2, 4));
+    };
+    const curve = (ax: number, ay: number, bx: number, by: number) => {
+      const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L;
+      const o1 = rnd.realInRange(-0.35, 0.35) * L, o2 = rnd.realInRange(-0.35, 0.35) * L;
+      const c1 = { x: ax + dx * 0.33 + nx * o1, y: ay + dy * 0.33 + ny * o1 }, c2 = { x: ax + dx * 0.66 + nx * o2, y: ay + dy * 0.66 + ny * o2 };
+      const n = Math.max(6, Math.round(L / 14)), pts: { x: number; y: number }[] = [];
+      for (let i = 0; i <= n; i++) {
+        const t = i / n, u = 1 - t;
+        pts.push({ x: u * u * u * ax + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * bx, y: u * u * u * ay + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * by });
+      }
+      return pts;
+    };
+    const doors = yards.filter((y) => y.path).map((y) => ({ x: y.x, y: y.y + y.h * 0.45 }));
+    if (S.story) {
+      // главная тропа вдоль полосы (на шоссе и в городе её закрывает асфальт)
+      const ph = rnd.realInRange(0, 9), main: { x: number; y: number }[] = [];
+      const mx = (y: number) => W / 2 + Math.sin(y * 0.0021 + ph) * 110 + Math.sin(y * 0.0061 + ph * 2) * 45;
+      for (let y = H; y >= 0; y -= 24) main.push({ x: mx(y), y });
+      trail(main, 44);
+      for (const d of doors) { const ty = d.y + rnd.between(60, 220); trail(curve(d.x, d.y, mx(ty), ty), 24); }
+    } else {
+      // «волны»: каждый двор — к ближайшему соседу, без повторов
+      const done = new Set<string>();
+      doors.forEach((d, i) => {
+        let best = -1, bd = 1e9;
+        doors.forEach((e, j) => { const q = Math.hypot(e.x - d.x, e.y - d.y); if (j !== i && q < bd) { bd = q; best = j; } });
+        const key = [i, best].sort().join();
+        if (best >= 0 && !done.has(key) && bd < 1400) { done.add(key); trail(curve(d.x, d.y, doors[best].x, doors[best].y), 26); }
+      });
+    }
+    // пятна по всей карте: голая земля, тёмная и сухая трава, цветы кучками (не на пашнях)
+    const area = (W * H) / 250000;
+    const spots: [string, number, number, number][] = [["gp_dirt", 4, 0.22, 140], ["gp_dark", 2, 0.4, 260], ["gp_dry", 2, 0.35, 240], ["gp_flow", 3, 0.5, 110]];
+    for (const [key, nv, k, sz] of spots) for (let i = 0; i < Math.round(area * k); i++) {
+      const x = rnd.between(60, W - 60), y = rnd.between(60, H - 60), s = sz * rnd.realInRange(0.6, 1.5);
+      if (inField(x, y, s * 0.4)) continue;
+      blob(key + rnd.between(0, nv - 1), x, y, s, s * rnd.realInRange(0.6, 0.9), key === "gp_flow" ? -9.5 : -9.9);
+    }
+  }
   themeGround(th: string, rnd: Phaser.Math.RandomDataGenerator) {
     const band = (key: string, x: number, w: number, y = 0, h = H, sc = 0.5) => this.add.tileSprite(x, y, w, h, key).setOrigin(0).setTileScale(sc).setDepth(-9.6);
     const g = this.add.graphics().setDepth(-9.5);
@@ -1323,8 +1425,8 @@ class Game extends Phaser.Scene {
       // поля по сторонам от тропы
       for (let y = 500; y < H - 700; y += rnd.between(500, 800)) {
         const left = rnd.frac() < 0.5, w = rnd.between(280, 420), h = rnd.between(220, 360), x = left ? rnd.between(200, 330) : W - rnd.between(200, 330) - w;
-        band("t_farm", x, w, y, h, 0.45);
-        g.lineStyle(3, 0x5a4024, 0.5).strokeRect(x, y, w, h);
+        FIELDS.push({ x, y, w, h });
+        this.fieldImage(FIELDS.length - 1, x, y, w, h, rnd);
       }
     } else if (th === "road") {
       band("t_asphalt", cx - 270, 540);
@@ -1475,6 +1577,7 @@ class Game extends Phaser.Scene {
       ob(p, 14, { low: true });
       p.light = { dx: 0, dy: -4, r: 210, col: 0xff8a30, a: 0.75, flick: 0.25, night: false };
       p.fire = this.flames(x, y - 6, 1);
+      this.yards.push({ x, y: y + 4, w: 130, h: 100, path: false });
       for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + 0.5; const lx = x + Math.cos(a) * 44, ly = y + Math.sin(a) * 30; if (free(lx, ly, 10)) { const lp = add("fence", lx, ly, 99, this.add.image(lx, ly, "prop_fence").setDisplaySize(40, 12).setRotation(a + Math.PI / 2).setDepth(-4)); void lp; } }
     };
     for (let n = 0, tries = 0; n < 4 && tries < 300; tries++) {
@@ -1482,6 +1585,7 @@ class Game extends Phaser.Scene {
       if (!free(x, y, 60)) continue;
       fire(x, y); n++;
     }
+    this.groundPatches(S.story ? CHAPTERS[CH].theme : "farm", this.yards, rnd);
     // фонарные столбы: у дома и вдоль старой дороги через карту
     const lamp = (x: number, y: number, broken: boolean) => {
       const p = add("lamp", x, y, 99, img("lamp", x, y, 0.95));
@@ -1515,6 +1619,34 @@ class Game extends Phaser.Scene {
         this.walls.push(p.wall);
       }
       n++;
+    }
+    // заборчик вокруг пашен: пролёты по краю, пара дыр-проходов
+    for (const f of FIELDS) {
+      const seg = (fx: number, fy: number, a: number) => {
+        const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(64, 20).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
+        const p = add("fence", fx, fy, 99, im);
+        p.wall = box(fx, fy, 30, 3, a, 12); this.walls.push(p.wall);
+      };
+      const x0 = f.x - 14, x1 = f.x + f.w + 14, y0 = f.y - 16, y1 = f.y + f.h + 12;
+      const nx = Math.max(2, Math.round((x1 - x0) / 62)), ny = Math.max(2, Math.round((y1 - y0) / 62));
+      const gaps = new Set([rnd.between(0, 2 * (nx + ny) - 1), rnd.between(0, 2 * (nx + ny) - 1)]);
+      let k = 0;
+      for (let i = 0; i < nx; i++, k++) if (!gaps.has(k)) seg(x0 + (i + 0.5) * (x1 - x0) / nx, y0, 0);
+      for (let i = 0; i < nx; i++, k++) if (!gaps.has(k)) seg(x0 + (i + 0.5) * (x1 - x0) / nx, y1, 0);
+      for (let i = 0; i < ny; i++, k++) if (!gaps.has(k)) seg(x0, y0 + (i + 0.5) * (y1 - y0) / ny, Math.PI / 2);
+      for (let i = 0; i < ny; i++, k++) if (!gaps.has(k)) seg(x1, y0 + (i + 0.5) * (y1 - y0) / ny, Math.PI / 2);
+      // пугало посреди пашни (иногда два) и часто — брошенный трактор
+      const hasTr = BUILD_NAMES.has("tractor") && rnd.frac() < 0.65;
+      const sx = hasTr ? (rnd.frac() < 0.5 ? 0.25 : 0.75) : rnd.realInRange(0.3, 0.7);
+      for (let i = 0, ns = rnd.frac() < 0.3 ? 2 : 1; i < ns; i++) deco("scarecrow", f.x + f.w * (i ? 1 - sx : sx), f.y + f.h * rnd.realInRange(0.35, 0.75), 0);
+      if (hasTr) {
+        const tex = this.textures.get("bd_tractor").getSourceImage(), k = buildK("tractor"), w = tex.width / k, h = tex.height / k;
+        const tx = f.x + f.w * (1 - sx), ty = f.y + f.h * rnd.realInRange(0.4, 0.6);
+        const im = this.add.image(tx, ty, "bd_tractor").setDisplaySize(w, h).setFlipX(rnd.frac() < 0.5).setOrigin(0.5, 0.85).setY(ty + h * 0.25).setDepth(ty + h * 0.15);
+        this.artSh.push([im, 0.5]);
+        const p = add("deco", tx, ty, 999, im);
+        p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; this.walls.push(p.wall);
+      }
     }
     // предупреждающие таблички
     for (let n = 0, tries = 0; n < 5 && tries < 200; tries++) {

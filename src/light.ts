@@ -237,10 +237,12 @@ export class Lighting {
     this.casters = this.casters.filter((c) => c.img !== img);
   }
   addTree(img: Phaser.GameObjects.Image, sq = 1) {
-    // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер
-    const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - img.originY)
+    // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер.
+    // У нарисованных построек/предметов тень крепим к самому нижнему непрозрачному ряду (колёса, фундамент), а не к точке опоры
+    const b = artBase(img), oy = b ?? img.originY;
+    const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - oy)
       .setDisplaySize(img.displayWidth, img.displayHeight * sq).setFlipY(true).setFlipX(img.flipX).setTintFill(0x000000);
-    const c = this.scene.add.container(img.x, img.y, [sh]).setDepth(-3.6);
+    const c = this.scene.add.container(img.x, img.y + (oy - img.originY) * img.displayHeight, [sh]).setDepth(-3.6);
     this.trees.push({ img, c, sh });
   }
 
@@ -528,4 +530,26 @@ export class Lighting {
     const t = this.sun.t;
     return tr(t < 0.06 || t > 0.95 ? "dawn" : t < 0.44 ? "day" : t < 0.56 ? "dusk" : "night");
   }
+}
+
+/** нижний край нарисованной картинки (доля высоты): последний ряд, где заметно много непрозрачных пикселей */
+const BASE = new Map<string, number | null>();
+function artBase(img: Phaser.GameObjects.Image): number | null {
+  const key = img.texture.key;
+  if (!/^(ob|bd|hs)_/.test(key)) return null;
+  if (BASE.has(key)) return BASE.get(key)!;
+  let res: number | null = null;
+  try {
+    const src = img.texture.getSourceImage() as HTMLImageElement, w = src.width, h = src.height;
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const c = cv.getContext("2d")!; c.drawImage(src, 0, 0);
+    const d = c.getImageData(0, 0, w, h).data;
+    for (let y = h - 1; y >= 0 && res === null; y--) {
+      let n = 0;
+      for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 140) n++;
+      if (n > w * 0.04) res = (y + 1) / h;
+    }
+  } catch { res = null; }
+  BASE.set(key, res);
+  return res;
 }
