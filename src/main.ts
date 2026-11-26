@@ -9,7 +9,7 @@ import { t, type Key } from "./i18n";
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
 import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
-import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
+import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, unlockChapter, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
 import { loadGroundFiles, makeGround, makeGroundPatches, makeSplats, HAS_GRASS } from "./groundArt";
 import { loadArtFiles, objArt, HOUSE_NAMES, ART_K, OBJ_K, BUILD_NAMES, buildK } from "./artFiles";
@@ -816,7 +816,7 @@ class Game extends Phaser.Scene {
     autoJoined = true; // ссылку-приглашение предлагаем кнопкой в меню
     openMenu({
       waves: () => this.startPlay(),
-      story: (fresh) => this.startStory(fresh),
+      story: (fresh, ch) => this.startStory(fresh, ch),
       host: () => { this.startPlay(); this.hostGame(); },
       join: (c) => { this.startPlay(); this.joinGame(c); },
       changed: () => this.applySettings(),
@@ -904,7 +904,16 @@ class Game extends Phaser.Scene {
 
   // ───────── сюжет ─────────
   /** из меню: новая игра или продолжение с последнего лагеря */
-  startStory(fresh: boolean) {
+  startStory(fresh: boolean, pick?: number) {
+    if (pick !== undefined && pick > 0) {
+      // выбранная глава: начало главы, прокачка из сохранения, оружие из прошлых глав
+      const old = loadStory();
+      const owned = STORY_OWNED().map((v, k) => v || !!old?.owned?.[k] || CHAPTERS.slice(0, pick).some((c) => c.weapons?.some((w) => w.slot === k)));
+      const has = (id: WeaponId) => owned[SLOTS.indexOf(id)];
+      saveStory({ ch: pick + 1, camp: 0, hp: 999, armor: 0, medkits: 1, grenades: 2, owned, clip: {}, weapon: has("rifle") ? 0 : has("shotgun") ? 1 : 2, kills: 0, score: 0, time: 0,
+        ap: 0, inc: 0, stock: { bazooka: has("bazooka") ? 4 : 0, flamer: has("flamer") ? 120 : 0 }, level: old?.level, xp: old?.xp, parts: old?.parts, up: old?.up });
+      fresh = false;
+    }
     if (fresh) saveStory(null);
     storyCh = fresh ? 0 : Math.max(0, (loadStory()?.ch ?? 1) - 1);
     MODE = "story";
@@ -1176,6 +1185,7 @@ class Game extends Phaser.Scene {
     S.bannerText = last ? t("st_win") : t("st_done", { n: CH + 1 }); S.bannerN++;
     S.msg = last ? t("st_win_d", { name: S.hero || t("player") }) : t("st_next", { n: CH + 2 }); S.msgT = 6;
     sfx("wave", 0.9);
+    unlockChapter(last ? CHAPTERS.length : CH + 2);
     if (NET.role === "client") { this.saveHeroNow(); if (last) this.time.delayedCall(9000, () => this.toMenu()); return; }
     if (last) { saveStory(null); this.time.delayedCall(9000, () => this.toMenu()); return; }
     // следующая глава: сохраняемся в её начале и перестраиваем мир (гости перестроятся по новому «hi»)

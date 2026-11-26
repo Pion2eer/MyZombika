@@ -1,7 +1,7 @@
 // Главный экран: выбор режима, игра с другом, настройки, «как играть». Обычный HTML поверх игры
 // (за ним видно живой мир). Настройки хранятся в localStorage.
 import { LANGS, deviceLang, setLang, getLang, t, type Lang, type Key } from "./i18n";
-import { loadStory, CHAPTERS } from "./story";
+import { loadStory, CHAPTERS, unlockedChapters } from "./story";
 import { fetchTop, fmtTime, submitScore, localBest, type Result } from "./scores";
 
 export type Quality = "low" | "med" | "high";
@@ -31,7 +31,7 @@ try { Object.assign(settings, JSON.parse(localStorage.getItem(KEY) || "{}")); } 
 if (!(settings.lang in LANGS)) settings.lang = deviceLang();
 setLang(settings.lang);
 
-export interface MenuActions { waves(): void; story?(fresh: boolean): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
+export interface MenuActions { waves(): void; story?(fresh: boolean, ch?: number): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
 
 let root: HTMLDivElement | null = null;
 let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" = "main";
@@ -71,7 +71,7 @@ const CSS = `
 .mz .join{display:flex;gap:8px;margin-bottom:10px}.mz .join input{flex:1}.mz .join .btn{width:auto;margin:0;text-align:center}
 .mz p{margin:0 0 10px;line-height:1.45;color:#ddd3bc}
 .mz .squad{display:flex;align-items:center;gap:6px;margin:4px 0 6px}.mz .squad span{flex:1;font-weight:700;color:#ffe2a0}
-.mz .squad button{font:inherit;font-weight:700;color:#f2ead8;background:#2a241a;border:1.5px solid #5a5040;border-radius:8px;padding:6px 10px;cursor:pointer}.mz .squad button.on{background:#4a3c1c;border-color:#ffe2a0;color:#ffe2a0}
+.mz .squad button{font:inherit;font-weight:700;color:#f2ead8;background:#2a241a;border:1.5px solid #5a5040;border-radius:8px;padding:6px 10px;cursor:pointer}.mz .chs{flex-wrap:wrap}.mz .chs span{flex-basis:100%}.mz .squad button:disabled{opacity:.4;cursor:default}.mz .squad button.on{background:#4a3c1c;border-color:#ffe2a0;color:#ffe2a0}
 .mz p.note{font-size:12.5px;color:#a89f88}
 .mz.dead{background:radial-gradient(ellipse at center,rgba(60,6,4,.45) 0%,rgba(16,4,3,.9) 75%)}
 .mz .over{text-align:center}
@@ -168,6 +168,19 @@ function render() {
     const sv = loadStory();
     if (sv && (sv.camp > 0 || sv.ch > 1)) c.appendChild(btn(`${esc(t("st_continue", { n: sv.camp, c: sv.ch }))}<small>${esc(t("st_chn", { n: sv.ch, name: t(`st_th_${CHAPTERS[Math.min(CHAPTERS.length, Math.max(1, sv.ch)) - 1].theme}` as Key) }))}</small>`, () => a.story?.(false), "main", "story"));
     c.appendChild(btn(`${esc(t("st_new"))}<small>${esc(t("st_new_d"))}</small>`, () => a.story?.(true), sv && (sv.camp > 0 || sv.ch > 1) ? "" : "main", "story"));
+    // любая пройденная глава — сразу (открытые — по самой дальней, куда дошёл)
+    const open = unlockedChapters();
+    if (open > 1) {
+      const row = el("div", { class: "squad chs" });
+      row.appendChild(el("span", {}, esc(t("st_pick"))));
+      CHAPTERS.forEach((ch, i) => {
+        const name = t("st_chn", { n: i + 1, name: t(`st_th_${ch.theme}` as Key) });
+        const b = el("button", { title: name, ...(i + 1 > open ? { disabled: "" } : {}) }, i + 1 > open ? "🔒" : String(i + 1)) as HTMLButtonElement;
+        if (i + 1 <= open) b.onclick = () => a.story?.(true, i);
+        row.appendChild(b);
+      });
+      c.appendChild(row);
+    }
     // отряд: боты вместо недостающих игроков
     const sq = el("div", { class: "squad" });
     sq.appendChild(el("span", {}, esc(t("st_squad"))));

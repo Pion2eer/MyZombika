@@ -96,6 +96,17 @@ export function loadStory(): StorySave | null {
     return s;
   } catch { return null; }
 }
+/** сколько глав открыто (номер самой дальней доступной главы, с 1): не сбрасывается новой игрой и концом игры */
+const BEST = "myzombika-best";
+export function unlockedChapters(): number {
+  let b = 1;
+  try { b = Math.max(1, Number(localStorage.getItem(BEST)) || 1); } catch { /* приватный режим */ }
+  const sv = loadStory();
+  return Math.min(CHAPTERS.length, Math.max(b, sv?.ch ?? 1));
+}
+export function unlockChapter(n: number) {
+  try { if (n > unlockedChapters()) localStorage.setItem(BEST, String(Math.min(CHAPTERS.length, n))); } catch { /* приватный режим */ }
+}
 export function saveStory(s: StorySave | null) {
   try { if (s) localStorage.setItem(KEY, JSON.stringify({ ...s, v: 2 })); else localStorage.removeItem(KEY); } catch { /* приватный режим */ }
 }
