@@ -455,3 +455,87 @@ export function ammoVox(body: number, stripe: number, can = false): Vox {
   });
   return m;
 }
+
+/** «Хозяин» (по картинке art/gen/props/boss_ref.png): огромный горбатый мутант. Ноги-тумбы, чёрные лохмотья,
+ *  бочкообразное серо-лиловое тело в красных язвах, горб, огромные ржавые наплечники и латы на груди с цепью
+ *  (plates — с латами; без — голые плечи), на спине — красный ржавый баллон. Слои 0..18. */
+export function bossBody(plates: boolean): Vox {
+  const m = newVox(0, 19);
+  const RUST = [0x9a5a2c, 0x86481f, 0xb06e36, 0x6e3a1a], RIVET = 0x3a2a1c, CHAIN = [0x5a524a, 0x3a342e];
+  const FLESH = [0xb84a3c, 0x9a3428, 0xd06a58], TANK = [0xb03a22, 0x962e1a, 0xc8925a];
+  const skin = (r: number, x: number, y: number, z: number) => {
+    const s = hash(x >> 1, y >> 1, z >> 1);
+    if (s < 0.13) return pick(FLESH, r);
+    if (s > 0.9) return shade(SKIN_SH, 0.9 + r * 0.1);
+    return shade(SKIN, 0.9 + r * 0.14);
+  };
+  fill(m, (u, v, z, x, y) => {
+    const r = hash(x, y, z);
+    const e = (cu: number, cv: number, ru: number, rv: number) => ((u - cu) / ru) ** 2 + ((v - cv) / rv) ** 2;
+    // баллон на спине: лежит поперёк, концы-заглушки, хомуты
+    {
+      const tu = u + 6.3, tz = z - 15.2, d = tu * tu + tz * tz * 1.3;
+      if (Math.abs(v) < 7.5 && d < 2.9 ** 2) {
+        if (Math.abs(v) > 6.6) return 0x4a2a1c;
+        if (Math.abs(Math.abs(v) - 3.4) < 0.6) return LEATHER;
+        return r < 0.2 ? TANK[2] : pick(TANK.slice(0, 2), r);
+      }
+      if (Math.abs(v + 1) < 0.8 && tz > 2.4 && tz < 3.6 && Math.abs(tu) < 0.9) return 0x2a2a2a; // вентиль
+    }
+    // ноги-тумбы
+    if (z <= 2) return e(0.5, -5, 2.8, 2.6) < 1 || e(0.5, 5, 2.8, 2.6) < 1 ? shade(SKIN_SH, 0.85 + r * 0.15) : -1;
+    // рваная юбка из лохмотьев
+    if (z <= 4) return e(0.4, 0, 5.4 + r * 1.2, 9.4 + r * 1.2) < 1 ? pick(FUR_DARK, r) : -1;
+    // туловище: бочка, к плечам шире; горбится вперёд
+    if (z <= 13) {
+      const t = (z - 4) / 9, ru = 6.4 + Math.sin(t * Math.PI) * 1.6, rv = 9 + t * 2.6, cu = 0.4 + t * 1.1;
+      if (e(cu, 0, ru + r * 0.4, rv + r * 0.4) < 1) {
+        const front = u - cu > ru - 2.2;
+        // латы на груди с заклёпками
+        if (plates && front && z >= 7 && z <= 12 && Math.abs(v) < 6) return (Math.abs(Math.abs(v) - 4.6) < 0.6 && z % 2 === 0) ? RIVET : pick(RUST, r);
+        // цепь наискосок через грудь
+        if (front && Math.abs(v - (z - 8.5) * 1.3) < 0.9) return CHAIN[(z + (v > 0 ? 1 : 0)) & 1];
+        // пояс-лохмотья
+        if (z <= 5) return pick(FUR, r);
+        return skin(r, x, y, z);
+      }
+      // горб сзади
+      if (z >= 10 && e(-2.2, 0, 5, 6.8) < 1) return skin(r, x, y, z);
+      return -1;
+    }
+    // плечи: огромные наплечники (или голые бугры)
+    if (z <= 16) {
+      const h = (z - 13) / 3.4;
+      for (const s of [-1, 1]) {
+        const ru = 5.4 * Math.sqrt(1 - h * h), rv = 5.6 * Math.sqrt(1 - h * h);
+        if (e(0.6, s * 9.6, ru, rv) < 1) {
+          if (!plates) return skin(r, x, y, z);
+          if (z === 16 || (Math.abs(u - 0.6) > ru - 1.2 && z % 2 === 1 && r < 0.4)) return r < 0.5 ? RIVET : pick(RUST, r * 0.3);
+          return pick(RUST, r);
+        }
+      }
+      // горб между плечами
+      if (z <= 15 && e(-1.4, 0, 4.4 - (z - 13), 6.2 - (z - 13) * 1.2) < 1) return skin(r, x, y, z);
+    }
+    return -1;
+  });
+  return m;
+}
+
+/** голова «Хозяина»: маленькая, лысая, глубоко между плеч и выдвинута вперёд; жёлтые глаза, оскал */
+export function bossHead(): Vox {
+  const m = newVox(13, 8);
+  fill(m, (u, v, z, x, y) => {
+    const r = hash(x, y, z);
+    const cu = 4.6, zc = 16.2;
+    const d = ((u - cu) / 3.5) ** 2 + (v / 3.2) ** 2 + ((z - zc) / 3.4) ** 2;
+    if (d >= 1) return -1;
+    const front = u - cu > 2.2;
+    if (front && z === 17 && Math.abs(Math.abs(v) - 1.4) < 0.7) return EYE;
+    if (front && z === 16 && Math.abs(Math.abs(v) - 1.4) < 0.9) return EYE_WHITE;
+    if (front && z === 14 && Math.abs(v) < 1.8) return r < 0.5 ? 0xe8d8b0 : 0x3a0a08; // оскал
+    if (z >= 18 && r < 0.12) return 0xb84a3c; // язвы на макушке
+    return shade(z >= 17 ? SKIN : SKIN_SH, 0.92 + r * 0.12);
+  });
+  return m;
+}

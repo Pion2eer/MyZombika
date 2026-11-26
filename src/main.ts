@@ -19,7 +19,7 @@ import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, artFootprint, silTex, type Circle } from "./light";
-import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, ammoVox, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
+import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, ammoVox, bossBody, bossHead, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
 
 let W = 3000, H = 3000; // размер мира, px (в сюжете — длинная вертикальная полоса)
 /** в сюжете не ставим деревья и камни на заслоны, в лагеря и у ящиков с оружием */
@@ -172,6 +172,17 @@ function makeStack(scene: Phaser.Scene, key: string, pal: Palette, part: "body" 
   for (let f = 0; f < FRAMES; f++) t.add(f, 0, (f % A.cols) * A.fw, Math.floor(f / A.cols) * A.fh, A.fw, A.fh);
   origins[key] = { x: A.ox / A.fw, y: A.oy / A.fh };
 }
+/** «Хозяин»: своя модель (по картинке ChatGPT), с латами и без */
+function makeBoss(scene: Phaser.Scene) {
+  setPalette(PAL_BOSS);
+  for (const [key, m, w] of [["zBossA_body", bossBody(true), 31], ["zBoss_body", bossBody(false), 31], ["zBoss_head", bossHead(), 21]] as const) {
+    if (scene.textures.exists(key)) continue;
+    const A = renderStack(m, { frames: FRAMES, k: K, dz: DZ, smooth: true, zTop: 32, w });
+    const t = scene.textures.addCanvas(key, A.canvas)!;
+    for (let f = 0; f < FRAMES; f++) t.add(f, 0, (f % A.cols) * A.fw, Math.floor(f / A.cols) * A.fh, A.fw, A.fh);
+    origins[key] = { x: A.ox / A.fw, y: A.oy / A.fh };
+  }
+}
 /** предмет из срезов (крутится на месте): кадры поворотов, как у героя */
 function makeItem(scene: Phaser.Scene, key: string, m: ReturnType<typeof grenadeVox>, w: number, dz: number) {
   if (scene.textures.exists(key)) return;
@@ -200,7 +211,7 @@ const PAL_ZOMBIE_C: Palette = {
 /** в броне: стальной шлем (волосы) и латы на груди (жилет — вторая стопка, слетает, когда броню сбили) */
 const PAL_ZOMBIE_D: Palette = { ...PAL_ZOMBIE_A, HAIR: [0x8a9098, 0x767c84, 0x9aa0a8, 0x62686e], BEARD: [0x3c4430, 0x2e3426, 0x48523a] };
 /** «Хозяин»: серо-лиловая гниющая кожа, чёрное тряпьё, на груди — ржавые латы (слетают, когда его почти добили) */
-const PAL_BOSS: Palette = { ...PAL_ZOMBIE_A, SKIN: 0x8a7a8e, SKIN_SH: 0x5e4e62, FUR: [0x2a2226, 0x221c20, 0x3a2c30], FUR_DARK: [0x5a1a14, 0x4a1410, 0x6a2418], HAIR: [0x1a1416, 0x241c1e, 0x2e2426, 0x120e10], BEARD: [0x6a2a20, 0x5a2018, 0x7a3426], LACE: 0x8a1a14, EYE: 0xffe040, EYE_WHITE: 0xff5010 };
+const PAL_BOSS: Palette = { ...PAL_ZOMBIE_A, SKIN: 0x9a8098, SKIN_SH: 0x6e5672, FUR: [0x2a2426, 0x221c20, 0x3a3234], FUR_DARK: [0x2e2a2c, 0x24201e, 0x3e3836], LEATHER: 0x4a2a18, HAIR: [0x1a1416, 0x241c1e, 0x2e2426, 0x120e10], BEARD: [0x6a2a20, 0x5a2018, 0x7a3426], LACE: 0x8a1a14, EYE: 0xffe040, EYE_WHITE: 0xff5010 };
 const PAL_BOSS_PL: Palette = { ...PAL_BOSS, FUR: [0x7a5a44, 0x6a4a36, 0x5a3c2a], LACE: 0x2a1c14, BRASS: 0xb08a5a };
 const PAL_PLATE: Palette = { ...PAL_ZOMBIE_D, FUR: [0x9aa2ac, 0x828a94, 0x6a727c], LACE: 0x2a2c30, BRASS: 0xc0c8d0 };
 /** громила: тёмно-багровая кожа, рваная спецовка */
@@ -232,6 +243,8 @@ class Humanoid {
   /** что в руках (у людей) */
   weapon: WeaponId = "rifle";
   armored = false;
+  /** толщина рук (у босса — бревна) и рука-дубина (-1 левая, 1 правая, 0 — нет) */
+  bulk = 1; club = 0;
   /** ползёт без ног: тело опущено на CUT слоёв */
   crawl = false;
   constructor(scene: Phaser.Scene, x: number, y: number, public skin: string, public pal: Palette, public gun: boolean) {
@@ -282,6 +295,25 @@ class Humanoid {
       const bend = Math.min(4.2, Math.sqrt(Math.max(0, 8.2 ** 2 - (d / 2) ** 2)));
       const e = P((su + hu) / 2 - 0.6, (sv + hv) / 2 + side * bend * 0.85, (ARM_Z + hz) / 2 - 1 - bend * 0.35);
       const OUT = 0x2e2014, sleeve = this.armored ? 0x5e6e82 : this.pal.FUR[1], cuff = this.armored ? 0x3a4452 : this.pal.FUR[2];
+      if (this.bulk > 1) {
+        // босс: голые ручищи-бревна, одна — раздутая дубина в язвах
+        const b = this.bulk, isClub = this.club === side;
+        sg.lineStyle(5 * b, 0x000000).lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y).fillCircle(h.x, h.y, (isClub ? 5.5 : 3) * b * 0.8);
+        g.lineStyle(6.4 * b, OUT).lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y);
+        g.fillStyle(OUT).fillCircle(s.x, s.y, 3.4 * b).fillCircle(e.x, e.y, 3 * b);
+        g.lineStyle(4.8 * b, this.pal.SKIN_SH).lineBetween(s.x, s.y, e.x, e.y).lineStyle(4.2 * b, skin).lineBetween(s.x, s.y - 0.4, e.x, e.y - 0.4);
+        g.lineStyle(4 * b, skin).lineBetween(e.x, e.y, h.x, h.y).fillStyle(skin).fillCircle(e.x, e.y, 2.1 * b);
+        g.fillStyle(0xb84a3c).fillCircle(e.x + 1, e.y - 0.5, 0.9 * b).fillCircle((s.x + e.x) / 2, (s.y + e.y) / 2, 0.7 * b);
+        if (isClub) {
+          const R0 = 5.2 * b;
+          g.fillStyle(OUT).fillCircle(h.x, h.y, R0 + 1.2).fillStyle(this.pal.SKIN_SH).fillCircle(h.x, h.y, R0).fillStyle(skin).fillCircle(h.x - 0.8, h.y - 1, R0 * 0.8);
+          for (let k = 0; k < 5; k++) { const q = (k / 5) * TAU + 0.6; g.fillStyle(k % 2 ? 0xb84a3c : 0x9a3428).fillCircle(h.x + Math.cos(q) * R0 * 0.55, h.y + Math.sin(q) * R0 * 0.5, R0 * 0.24); }
+        } else {
+          g.fillStyle(OUT).fillCircle(h.x, h.y, 3.3 * b).fillStyle(skin).fillCircle(h.x, h.y, 2.5 * b);
+          for (const f of [-1, 0, 1]) g.fillStyle(0xe8d8b0).fillCircle(h.x + Math.cos(a + f * 0.5) * 2.8 * b, h.y + Math.sin(a + f * 0.5) * 2.8 * b, 0.55 * b); // когти
+        }
+        return;
+      }
       sg.lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y).fillCircle(h.x, h.y, 2.9);
       // контур
       g.lineStyle(6.2, OUT).lineBetween(s.x, s.y, e.x, e.y).lineStyle(5, OUT).lineBetween(e.x, e.y, h.x, h.y);
@@ -513,7 +545,7 @@ interface Enemy {
   /** проверка «застрял»: где был и сколько ждать до проверки */
   sx: number; sy: number; st: number; side: number; sideT: number;
   /** броня (у «в броне»), горит ещё столько секунд, когда следующий ожог */
-  arm?: number; burn?: number; burnT?: number; fireFx?: Phaser.GameObjects.Particles.ParticleEmitter;
+  arm?: number; burn?: number; burnT?: number; fireFx?: Phaser.GameObjects.Particles.ParticleEmitter; tankFx?: Phaser.GameObjects.Particles.ParticleEmitter;
 }
 /** детали с врага: [шанс, от, до] */
 const PARTS: Record<Kind, [number, number, number]> = { zombie: [0.05, 1, 1], runner: [0.07, 1, 1], rat: [0.02, 1, 1], hyena: [0.08, 1, 1], panther: [0.3, 1, 2], bear: [1, 4, 6], spitter: [0.35, 1, 2], armored: [0.5, 1, 3], brute: [0.8, 2, 4], bloater: [0.2, 1, 2], boss: [1, 12, 16] };
@@ -711,9 +743,7 @@ class Game extends Phaser.Scene {
     makeStack(this, "zE_head", PAL_ZOMBIE_E, "head");
     makeStack(this, "zF_body", PAL_ZOMBIE_F, "body");
     makeStack(this, "zF_head", PAL_ZOMBIE_F, "head");
-    makeStack(this, "zBoss_body", PAL_BOSS, "body");
-    makeStack(this, "zBoss_head", PAL_BOSS, "head");
-    makeStack(this, "zBossA_body", PAL_BOSS_PL, "body");
+    makeBoss(this);
     makeItem(this, "it_ap", ammoVox(0x3a5a6a, 0x80e8ff), 18, 0.7);
     makeItem(this, "it_inc", ammoVox(0x5a3a22, 0xff7a20), 18, 0.7);
     makeItem(this, "it_ex", ammoVox(0x6a1a14, 0xffd040), 18, 0.7);
@@ -2268,7 +2298,7 @@ class Game extends Phaser.Scene {
       const [sk, pal] = kind === "zombie" ? ["zA", PAL_ZOMBIE_A] as const : kind === "spitter" ? ["zC", PAL_ZOMBIE_C] as const
         : kind === "armored" ? ["zD", PAL_ZOMBIE_D] as const : kind === "brute" ? ["zE", PAL_ZOMBIE_E] as const : kind === "bloater" ? ["zF", PAL_ZOMBIE_F] as const : kind === "boss" ? ["zBoss", PAL_BOSS] as const : ["zB", PAL_ZOMBIE_B] as const;
       e.hum = new Humanoid(this, x, y, sk, pal, false);
-      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; }
+      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; e.hum.bulk = 1.3; e.hum.club = -1; e.tankFx = this.flames(x, y, 1.1); }
       if (kind === "spitter") e.throwT = rand(1.5, 3);
       if (kind === "armored") { e.arm = ARMOR_PTS; e.hum.setArmor(true); }
       e.c = e.hum.c;
@@ -2326,6 +2356,8 @@ class Game extends Phaser.Scene {
 
   /** «Хозяин»: стадии разрушения, огненный след, залпы плевков */
   bossTick(e: Enemy, dt: number, moved: number, tg: { x: number; y: number } | null) {
+    // горящий баллон на спине
+    if (e.tankFx) { const sc = KIND_SCALE.boss ?? 1; e.tankFx.setPosition(e.x - Math.cos(e.a) * 6.3 * VOX * sc, e.y - Math.sin(e.a) * 6.3 * VOX * sc + lift(18) * sc).setDepth(e.y + 60); }
     const f = e.hp / (e.mh ?? KINDS.boss.hp), stage = f < 0.3 ? 3 : f < 0.55 ? 2 : f < 0.8 ? 1 : 0;
     while ((e.stage ?? 0) < stage) { e.stage = (e.stage ?? 0) + 1; this.bossBreak(e, e.stage); }
     const rage = e.stage ?? 0;
@@ -2909,6 +2941,7 @@ class Game extends Phaser.Scene {
     e.dead = true;
     S.kills++; CS.kills++;
     if (e.burn && e.burn > 0) { e.burn = 0; this.fireOff(e); this.addCorpseFire(e.x, e.y); }
+    if (e.tankFx) { const f = e.tankFx; e.tankFx = undefined; f.stop(); this.time.delayedCall(800, () => f.destroy()); if (NET.role !== "client") this.time.delayedCall(300, () => this.explode(e.x, e.y - 10, 1.4)); }
     S.score += KINDS[e.kind].score;
     this.popup(e.x, e.y - 34, `+${KINDS[e.kind].score}`, e.kind === "bear" ? "#ffb040" : "#ffe2a0");
     this.gainXp(KINDS[e.kind].score);

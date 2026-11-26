@@ -42,63 +42,97 @@ export const menuOpen = () => !!root && root.style.display !== "none";
 
 const CSS = `
 .mz{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;overflow:auto;padding:16px;box-sizing:border-box;
- background:radial-gradient(ellipse at center,rgba(10,12,8,.35) 0%,rgba(10,12,8,.82) 75%);font:15px system-ui,"Segoe UI",Roboto,"Noto Sans",sans-serif;color:#f2ead8;cursor:default;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+ background:radial-gradient(ellipse at center,rgba(8,14,6,.15) 0%,rgba(8,14,6,.45) 55%,rgba(6,10,4,.85) 100%);font:15px Rubik,"Segoe UI",Roboto,"Noto Sans",system-ui,sans-serif;color:#f4ead0;cursor:default;-webkit-user-select:none;user-select:none;touch-action:manipulation}
 .mz *{box-sizing:border-box}
-.mz .box{width:min(440px,100%);margin:auto}
-.mz h1{margin:0;text-align:center;font-size:clamp(40px,9vw,64px);font-weight:900;letter-spacing:1px;color:#ffe2a0;text-shadow:0 3px 0 #5a1a10,0 6px 18px rgba(0,0,0,.7)}
-.mz h1 b{color:#c8f070;font-weight:900}
-.mz .sub{text-align:center;color:#c8bfa8;margin:2px 0 18px;font-size:15px}
-.mz h2{margin:0 0 12px;font-size:20px;color:#ffe2a0}
-.mz .btn{display:block;width:100%;margin:0 0 10px;padding:13px 16px;border-radius:12px;border:2px solid rgba(255,226,160,.45);background:rgba(28,24,18,.92);color:#f2ead8;
- font:inherit;font-size:18px;font-weight:700;text-align:left;cursor:pointer}
-.mz .btn.ico{display:flex;align-items:center;gap:12px}.mz .btn .ic{flex:none;width:30px;height:30px;color:#ffb060}.mz .btn .ic svg{display:block;width:100%;height:100%}.mz .btn.main .ic{color:#ffd8a0}.mz .btn .tx{flex:1;min-width:0}
-.mz .btn small{display:block;font-size:13px;font-weight:500;color:#b8ae96;margin-top:2px}
-.mz .btn:hover,.mz .btn:focus-visible{border-color:#ffe2a0;background:rgba(58,46,24,.95);outline:none}
-.mz .btn.main{background:linear-gradient(#6a2a18,#4a1a10);border-color:#ff9a60}
-.mz .btn.main:hover{background:linear-gradient(#7e3420,#5a2014)}
-.mz .btn[disabled]{opacity:.55;cursor:default}
-.mz .btn .tag{float:right;font-size:12px;font-weight:700;color:#14110d;background:#c8bfa8;border-radius:6px;padding:2px 6px;margin-top:3px}
-.mz [dir=rtl] .btn,.mz[dir=rtl] .btn{text-align:right}.mz[dir=rtl] .btn .tag{float:left}
-.mz .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.mz .row2 .btn{text-align:center}.mz .join .btn.ico{gap:6px}.mz .join .btn .ic{width:20px;height:20px}
-.mz .card{background:rgba(28,24,18,.94);border:2px solid rgba(255,226,160,.35);border-radius:14px;padding:16px}
-.mz label.f{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.07)}
+.mz .box{width:min(560px,100%);margin:auto}
+.mz .logo{display:block;width:min(560px,100%);margin:0 auto -4px;filter:drop-shadow(0 6px 10px rgba(0,0,0,.7));animation:mzFloat 5s ease-in-out infinite;pointer-events:none}
+@keyframes mzFloat{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-5px) rotate(.4deg)}}
+.mz .sub{display:flex;align-items:center;gap:14px;justify-content:center;color:#f6e6b8;margin:0 0 16px;font-size:clamp(16px,2.6vw,22px);font-weight:700;text-shadow:0 2px 0 #1a1208,0 3px 10px rgba(0,0,0,.8)}
+.mz .sub:before,.mz .sub:after{content:"";flex:0 1 90px;height:2px;background:linear-gradient(90deg,transparent,#e0b060);border-radius:2px}
+.mz .sub:after{background:linear-gradient(270deg,transparent,#e0b060)}
+.mz h2{display:flex;align-items:center;gap:12px;justify-content:center;margin:2px 0 14px;font-size:22px;font-weight:800;color:#f6d488;text-shadow:0 2px 0 #1a1208}
+.mz h2:before,.mz h2:after{content:"";flex:1;height:2px;background:linear-gradient(90deg,transparent,rgba(224,176,96,.8))}.mz h2:after{background:linear-gradient(270deg,transparent,rgba(224,176,96,.8))}
+/* кнопки — металлические таблички: бронзовая рамка со срезанными углами, заклёпки, царапины */
+.mz .btn{--cut:12px;--plate:linear-gradient(180deg,#36584a 0%,#25443a 48%,#1b3229 100%);--rim:linear-gradient(180deg,#e2b46a,#9a6a30 55%,#6a4418);
+ position:relative;display:block;width:100%;margin:0 0 12px;padding:0;border:0;background:none;color:#f8eed4;font:inherit;font-size:19px;font-weight:800;text-align:left;cursor:pointer;
+ filter:drop-shadow(0 4px 0 rgba(10,8,4,.55)) drop-shadow(0 6px 10px rgba(0,0,0,.55));transition:transform .12s ease,filter .15s ease;-webkit-tap-highlight-color:transparent}
+.mz .btn .pl{position:relative;display:flex;align-items:center;gap:14px;min-height:54px;padding:10px 34px 10px 30px;background:var(--rim);
+ clip-path:polygon(var(--cut) 0,calc(100% - var(--cut)) 0,100% var(--cut),100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,var(--cut) 100%,0 calc(100% - var(--cut)),0 var(--cut))}
+.mz .btn .pl:before{content:"";position:absolute;inset:3px;z-index:0;background:repeating-linear-gradient(112deg,rgba(255,255,255,.035) 0 1px,transparent 1px 7px),radial-gradient(ellipse at 30% 0%,rgba(255,255,255,.16),transparent 60%),var(--plate);
+ clip-path:polygon(calc(var(--cut) - 1px) 0,calc(100% - var(--cut) + 1px) 0,100% calc(var(--cut) - 1px),100% calc(100% - var(--cut) + 1px),calc(100% - var(--cut) + 1px) 100%,calc(var(--cut) - 1px) 100%,0 calc(100% - var(--cut) + 1px),0 calc(var(--cut) - 1px));box-shadow:inset 0 2px 0 rgba(255,255,255,.18),inset 0 -3px 0 rgba(0,0,0,.35)}
+.mz .btn .pl:after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+ background:radial-gradient(circle at 15px 50%,#f2c880 0 2.2px,#5a3a14 3px,rgba(0,0,0,.35) 4px,transparent 5px),radial-gradient(circle at calc(100% - 15px) 50%,#f2c880 0 2.2px,#5a3a14 3px,rgba(0,0,0,.35) 4px,transparent 5px)}
+.mz .btn .pl>*{position:relative;z-index:2}
+.mz .btn .ic{flex:none;width:30px;height:30px;color:#f0c070;filter:drop-shadow(0 2px 0 rgba(0,0,0,.6))}.mz .btn .ic svg{display:block;width:100%;height:100%}
+.mz .btn .sep{flex:none;width:2px;align-self:stretch;margin:4px 0;background:linear-gradient(180deg,transparent,rgba(240,192,112,.75),transparent)}
+.mz .btn .tx{flex:1;min-width:0;text-shadow:0 2px 0 rgba(0,0,0,.55)}
+.mz .btn small{display:block;font-size:13px;font-weight:500;color:#e8dcc0;margin-top:2px;text-shadow:0 1px 0 rgba(0,0,0,.6)}
+.mz .btn:hover,.mz .btn:focus-visible{transform:translateY(-2px);outline:none;filter:drop-shadow(0 6px 0 rgba(10,8,4,.5)) drop-shadow(0 0 12px rgba(255,200,110,.45)) drop-shadow(0 8px 12px rgba(0,0,0,.5))}
+.mz .btn:hover .pl:before,.mz .btn:focus-visible .pl:before{filter:brightness(1.18) saturate(1.1)}
+.mz .btn:active{transform:translateY(2px);filter:drop-shadow(0 1px 0 rgba(10,8,4,.6)) drop-shadow(0 3px 6px rgba(0,0,0,.5))}
+.mz .btn.main{--plate:linear-gradient(180deg,#e08a2c 0%,#c06418 45%,#8a3e0c 100%);--rim:linear-gradient(180deg,#ffe0a0,#e0962c 50%,#8a4a10);animation:mzGlow 2.4s ease-in-out infinite}
+.mz .btn.main .ic{color:#fff0d0}
+@keyframes mzGlow{0%,100%{filter:drop-shadow(0 4px 0 rgba(10,8,4,.55)) drop-shadow(0 0 8px rgba(255,160,50,.45))}50%{filter:drop-shadow(0 4px 0 rgba(10,8,4,.55)) drop-shadow(0 0 18px rgba(255,170,60,.85))}}
+.mz .btn.main:hover{animation:none}
+.mz .btn.big{font-size:clamp(24px,4.4vw,34px);margin-bottom:14px}
+.mz .btn.big .pl{min-height:84px;padding:12px 40px 12px 34px;gap:16px}
+.mz .btn.big .ic{width:62px;height:62px;padding:12px;border-radius:50%;background:radial-gradient(circle at 40% 35%,rgba(255,255,255,.12),rgba(0,0,0,.4) 70%);box-shadow:inset 0 0 0 2px rgba(240,192,112,.6),0 2px 4px rgba(0,0,0,.4)}
+.mz .btn.big small{font-size:clamp(12px,1.9vw,15px)}
+.mz .btn[disabled]{opacity:.55;cursor:default;transform:none}
+.mz .btn .tag{float:right;font-size:12px;font-weight:700;color:#14110d;background:#e0c690;border-radius:6px;padding:2px 6px;margin-top:3px}
+.mz[dir=rtl] .btn{text-align:right}.mz[dir=rtl] .btn .tag{float:left}
+.mz .row2,.mz .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.mz .row2 .btn .pl,.mz .grid .btn .pl{justify-content:center;padding:9px 28px}.mz .row2 .btn .tx,.mz .grid .btn .tx{flex:0 1 auto}
+.mz .grid .btn{font-size:17px}.mz .grid .btn .pl{min-height:50px}
+.mz .join .btn .pl{padding:8px 26px}.mz .join .btn .ic{width:20px;height:20px}
+/* окна — тёмно-зелёная табличка в бронзовой раме с заклёпками по углам */
+.mz .card{position:relative;padding:18px 20px 8px;border-radius:14px;border:3px solid #b8853e;
+ background:radial-gradient(circle at 12px 12px,#f2c880 0 2.4px,#4a2e10 3.4px,transparent 4.4px),radial-gradient(circle at calc(100% - 12px) 12px,#f2c880 0 2.4px,#4a2e10 3.4px,transparent 4.4px),
+ radial-gradient(circle at 12px calc(100% - 12px),#f2c880 0 2.4px,#4a2e10 3.4px,transparent 4.4px),radial-gradient(circle at calc(100% - 12px) calc(100% - 12px),#f2c880 0 2.4px,#4a2e10 3.4px,transparent 4.4px),
+ repeating-linear-gradient(112deg,rgba(255,255,255,.025) 0 1px,transparent 1px 8px),linear-gradient(180deg,rgba(40,66,54,.96),rgba(22,40,32,.97));
+ box-shadow:0 0 0 2px #3a2610,inset 0 0 0 2px rgba(0,0,0,.35),inset 0 2px 0 3px rgba(255,255,255,.06),0 10px 30px rgba(0,0,0,.6)}
+.mz label.f{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid rgba(224,176,96,.18);font-weight:600}
 .mz label.f:last-of-type{border-bottom:0}
-.mz select,.mz input[type=text]{font:inherit;color:#f2ead8;background:#14110d;border:1px solid #5a5040;border-radius:8px;padding:7px 9px;min-width:0;max-width:60%}
+.mz select,.mz input[type=text]{font:inherit;font-weight:600;color:#f8eed4;background:#14231c;border:2px solid #8a6430;border-radius:9px;padding:7px 10px;min-width:0;max-width:60%;box-shadow:inset 0 2px 4px rgba(0,0,0,.5)}
+.mz select:focus,.mz input[type=text]:focus{outline:none;border-color:#f0c070}
 .mz input[type=text]{width:100%;max-width:none}
-.mz input[type=range]{width:50%;accent-color:#ffb060}
-.mz input[type=checkbox]{width:22px;height:22px;accent-color:#ffb060}
-.mz .join{display:flex;gap:8px;margin-bottom:10px}.mz .join input{flex:1}.mz .join .btn{width:auto;margin:0;text-align:center}
-.mz p{margin:0 0 10px;line-height:1.45;color:#ddd3bc}
-.mz .squad{display:flex;align-items:center;gap:6px;margin:4px 0 6px}.mz .squad span{flex:1;font-weight:700;color:#ffe2a0}
-.mz .squad button{font:inherit;font-weight:700;color:#f2ead8;background:#2a241a;border:1.5px solid #5a5040;border-radius:8px;padding:6px 10px;cursor:pointer}.mz .chs{flex-wrap:wrap}.mz .chs span{flex-basis:100%}.mz .squad button:disabled{opacity:.4;cursor:default}.mz .squad button.on{background:#4a3c1c;border-color:#ffe2a0;color:#ffe2a0}
-.mz p.note{font-size:12.5px;color:#a89f88}
-.mz.dead{background:radial-gradient(ellipse at center,rgba(60,6,4,.45) 0%,rgba(16,4,3,.9) 75%)}
+.mz input[type=range]{width:50%;accent-color:#e0a040}
+.mz input[type=checkbox]{width:22px;height:22px;accent-color:#e0a040}
+.mz .join{display:flex;gap:8px;margin-bottom:12px}.mz .join input{flex:1}.mz .join .btn{width:auto;margin:0}
+.mz p{margin:0 0 10px;line-height:1.5;color:#eadfc4}
+.mz .squad{display:flex;align-items:center;gap:6px;margin:6px 0 8px}.mz .squad span{flex:1;font-weight:800;color:#f6d488}
+.mz .squad button{font:inherit;font-weight:800;color:#f8eed4;background:linear-gradient(180deg,#36584a,#1b3229);border:2px solid #9a6a30;border-radius:8px;padding:6px 11px;cursor:pointer;box-shadow:0 2px 0 rgba(0,0,0,.5);transition:transform .1s}
+.mz .squad button:hover:not(:disabled){transform:translateY(-1px);border-color:#f0c070}
+.mz .chs{flex-wrap:wrap}.mz .chs span{flex-basis:100%}.mz .squad button:disabled{opacity:.4;cursor:default}
+.mz .squad button.on{background:linear-gradient(180deg,#e08a2c,#8a3e0c);border-color:#ffe0a0;color:#fff4dc}
+.mz p.note{font-size:12.5px;color:#c8bc9c}
+.mz.dead{background:radial-gradient(ellipse at center,rgba(60,6,4,.4) 0%,rgba(16,4,3,.88) 75%)}
 .mz .over{text-align:center}
 .mz .over .skull{width:64px;height:64px;margin:0 auto 4px;color:#e04a30;filter:drop-shadow(0 3px 8px rgba(0,0,0,.7))}
-.mz .over h1{color:#ff7a5a;text-shadow:0 3px 0 #3a0a06,0 6px 18px rgba(0,0,0,.8);font-size:clamp(34px,7vw,52px)}
-.mz .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0 10px}
-.mz .stat{background:rgba(28,24,18,.92);border:2px solid rgba(255,226,160,.25);border-radius:12px;padding:8px 4px}
-.mz .stat i{display:block;width:22px;height:22px;margin:0 auto 2px;color:#ffb060}.mz .stat i svg{width:100%;height:100%;display:block}
-.mz .stat b{display:block;font-size:24px;color:#ffe2a0;font-variant-numeric:tabular-nums}
-.mz .stat span{font-size:12px;color:#b8ae96}
-.mz .over.win h1{color:#c8f070;text-shadow:0 3px 0 #1a3a0a,0 6px 18px rgba(0,0,0,.8);font-size:clamp(44px,9vw,68px)}
-.mz .over.win .sub{margin:0 0 6px;font-size:14px;letter-spacing:.3px}
-.mz .over.win .stats{grid-template-columns:repeat(4,1fr)}
-.mz .stat.hi{border-color:#ffb060;background:rgba(70,40,16,.92)}
-.mz .rec{margin:0 0 6px;color:#c8bfa8}.mz .rec.new{color:#c8f070;font-weight:800;font-size:18px}
-.mz .lb{min-height:22px;margin:0 0 12px;color:#ddd3bc}.mz .lb b{color:#ffe2a0}
+.mz .over h1{margin:0;font-weight:900;color:#ff7a5a;text-shadow:0 3px 0 #3a0a06,0 6px 18px rgba(0,0,0,.8);font-size:clamp(34px,7vw,52px)}
+.mz .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 12px}
+.mz .stat{position:relative;border-radius:10px;border:2px solid #9a6a30;padding:9px 4px 8px;background:radial-gradient(ellipse at 30% 0%,rgba(255,255,255,.12),transparent 60%),linear-gradient(180deg,#30524a,#1b3229);box-shadow:0 0 0 1px #2a1a08,0 4px 0 rgba(0,0,0,.45),inset 0 2px 0 rgba(255,255,255,.1)}
+.mz .stat i{display:block;width:22px;height:22px;margin:0 auto 2px;color:#f0c070}.mz .stat i svg{width:100%;height:100%;display:block}
+.mz .stat b{display:block;font-size:24px;font-weight:900;color:#fff0c8;font-variant-numeric:tabular-nums;text-shadow:0 2px 0 rgba(0,0,0,.5)}
+.mz .stat span{font-size:12px;font-weight:600;color:#d8cba8}
+.mz .stat.hi{border-color:#ffd080;background:radial-gradient(ellipse at 30% 0%,rgba(255,255,255,.2),transparent 60%),linear-gradient(180deg,#d07a24,#8a3e0c)}
+.mz .rec{margin:0 0 6px;color:#d8cba8}.mz .rec.new{color:#c8f070;font-weight:800;font-size:18px}
+.mz .lb{min-height:22px;margin:0 0 12px;color:#eadfc4}.mz .lb b{color:#f6d488}
 .mz .lbn{display:flex;gap:8px;margin:0 0 12px}.mz .lbn input{flex:1}.mz .lbn .btn{width:auto;margin:0}
 .mz table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-.mz th{font-size:12px;font-weight:600;color:#b8ae96;text-align:right;padding:4px 6px}.mz th:nth-child(2),.mz td:nth-child(2){text-align:left}
-.mz td{padding:6px;text-align:right;border-top:1px solid rgba(255,255,255,.07)}
-.mz td:first-child{color:#b8ae96;width:2.5em}.mz td:nth-child(2){max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mz tr.me td{color:#ffe2a0;background:rgba(255,176,96,.12)}.mz tr.g1 td:first-child{color:#ffd24a;font-weight:800}
+.mz th{font-size:12px;font-weight:700;color:#d8b878;text-align:right;padding:4px 6px}.mz th:nth-child(2),.mz td:nth-child(2){text-align:left}
+.mz td{padding:6px;text-align:right;border-top:1px solid rgba(224,176,96,.15)}
+.mz td:first-child{color:#c8bc9c;width:2.5em}.mz td:nth-child(2){max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mz tr.me td{color:#fff0c8;background:rgba(224,140,40,.22)}.mz tr.g1 td:first-child{color:#ffd24a;font-weight:800}
 .mz .tbl{max-height:min(52vh,420px);overflow:auto;margin:0 0 12px}
-@media (max-height:520px){.mz .over .skull{display:none}.mz .over h1{font-size:34px}.mz .stats{margin:8px 0 6px}.mz .stat b{font-size:20px}.mz .stat i{display:none}.mz .tbl{max-height:46vh}}
-.mz .ver{text-align:center;color:#7a705c;font-size:12px;margin-top:8px}
-@media (max-height:520px){.mz h1{font-size:38px}.mz .sub{margin-bottom:10px}.mz .btn{padding:9px 12px;font-size:16px;margin-bottom:8px}.mz .btn small{display:none}
- .mz .box.wide{width:min(720px,100%)}.mz .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}}
+.mz .ver{text-align:center;color:rgba(240,228,200,.55);font-size:12px;margin-top:6px;text-shadow:0 1px 2px #000}
+@media (max-width:520px){.mz{padding:12px}.mz .grid,.mz .row2{gap:0 8px}.mz .grid .btn .pl,.mz .row2 .btn .pl{padding:8px 18px;gap:8px;--cut:9px}.mz .grid .btn .sep,.mz .row2 .btn .sep{display:none}.mz .grid .btn .ic{width:22px;height:22px}.mz .grid .btn .tx{text-align:center;line-height:1.15}.mz .btn .pl:after{background:radial-gradient(circle at 10px 50%,#f2c880 0 1.8px,#5a3a14 2.6px,transparent 3.6px),radial-gradient(circle at calc(100% - 10px) 50%,#f2c880 0 1.8px,#5a3a14 2.6px,transparent 3.6px)}.mz .sub{white-space:nowrap;gap:8px}.mz .sub:before,.mz .sub:after{flex-basis:30px}.mz .btn.big .pl{min-height:70px;padding:10px 30px 10px 26px}.mz .btn.big .ic{width:48px;height:48px;padding:9px}.mz .grid .btn{font-size:15px}.mz .stats{grid-template-columns:repeat(2,1fr)}.mz .over.win .stats{grid-template-columns:repeat(2,1fr)}}
+@media (max-height:520px){.mz .over .skull{display:none}.mz .over h1{font-size:34px}.mz .stats{margin:8px 0 6px}.mz .stat b{font-size:20px}.mz .stat i{display:none}.mz .tbl{max-height:46vh}
+ .mz .logo{width:min(360px,70%)}.mz .sub{margin-bottom:8px;font-size:15px}.mz .btn{margin-bottom:8px}.mz .btn small{display:none}.mz .btn.big .pl{min-height:58px}.mz .btn.big .ic{width:42px;height:42px;padding:8px}
+ .mz .box.wide{width:min(760px,100%)}}
+.mz .over.win h1{color:#c8f070;text-shadow:0 3px 0 #1a3a0a,0 6px 18px rgba(0,0,0,.8);font-size:clamp(44px,9vw,68px)}
+.mz .over.win .sub{margin:0 0 6px;font-size:15px}.mz .over.win .sub:before,.mz .over.win .sub:after{flex-basis:60px}
+.mz .over.win .stats{grid-template-columns:repeat(4,1fr)}
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, html = "") {
@@ -109,6 +143,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
 }
 // пиктограммы пунктов меню (линии 24×24, цвет — от кнопки)
 const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const LOGO = Object.values(import.meta.glob("./menuArt/logo.png", { eager: true, import: "default" }) as Record<string, string>)[0];
 const ICON = {
   // прицел: меткость
   aim: svg('<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5" stroke="currentColor" stroke-width="2"/>'),
@@ -156,16 +191,16 @@ function render() {
   const box = el("div", { class: "box" + (page === "main" || page === "top" ? " wide" : "") });
   root.appendChild(box);
   const btn = (html: string, fn: () => void, cls = "", ic?: Icon) => {
-    const b = el("button", { class: "btn " + cls + (ic ? " ico" : ""), type: "button" }, ic ? `<i class="ic">${ICON[ic]}</i><span class="tx">${html}</span>` : html);
+    const b = el("button", { class: "btn " + cls, type: "button" }, `<span class="pl">${ic ? `<i class="ic">${ICON[ic]}</i><span class="sep"></span>` : ""}<span class="tx">${html}</span></span>`);
     b.onclick = fn; return b;
   };
   if (page === "main") {
-    box.append(el("h1", {}, "My<b>Zombika</b>"), el("div", { class: "sub" }, esc(t("subtitle"))));
+    box.append(el("img", { class: "logo", src: LOGO, alt: "MyZombika", draggable: "false" }), el("div", { class: "sub" }, esc(t("subtitle"))));
+    if (joinCode) box.appendChild(btn(`${esc(t("m_join_friend", { c: joinCode }))}`, () => a.join(joinCode), "main big", "join"));
+    box.appendChild(btn(`${esc(t("m_waves"))}<small>${esc(t("m_waves_d"))}</small>`, () => a.waves(), joinCode ? "big" : "main big", "waves"));
+    box.appendChild(btn(`${esc(t("m_story"))}<small>${esc(t("m_story_d"))}</small>`, () => { page = "story"; render(); }, "big", "story"));
     const g = el("div", { class: "grid" });
     box.appendChild(g);
-    if (joinCode) g.appendChild(btn(`${esc(t("m_join_friend", { c: joinCode }))}`, () => a.join(joinCode), "main", "join"));
-    g.appendChild(btn(`${esc(t("m_waves"))}<small>${esc(t("m_waves_d"))}</small>`, () => a.waves(), joinCode ? "" : "main", "waves"));
-    g.appendChild(btn(`${esc(t("m_story"))}<small>${esc(t("m_story_d"))}</small>`, () => { page = "story"; render(); }, "", "story"));
     g.appendChild(btn(esc(t("m_coop")), () => { page = "coop"; render(); }, "", "coop"));
     g.appendChild(btn(esc(t("m_top")), () => { back = "main"; page = "top"; render(); }, "", "top"));
     g.appendChild(btn(esc(t("m_settings")), () => { page = "settings"; render(); }, "", "settings"));
@@ -318,6 +353,7 @@ function render() {
 
 function ensureRoot() {
   if (!root) {
+    document.head.appendChild(el("link", { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700;800;900&display=swap" }));
     document.head.appendChild(el("style", {}, CSS));
     root = el("div", { class: "mz" }) as HTMLDivElement;
     // клики по меню не должны доходить до игры
