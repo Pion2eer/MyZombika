@@ -27,9 +27,16 @@ let W = 3000, H = 3000; // размер мира, px (в сюжете — дли
 const inRock = (x: number, y: number, r = 0) => !!LANE && y < TUNNEL_Y + r && (x < LANE[0] + r || x > LANE[1] - r);
 /** пашни фермы: на них ничего не ставим (вокруг — заборчик) */
 let FIELDS: { x: number; y: number; w: number; h: number }[] = [];
+/** главная тропа сюжета: x по y (фаза своя у главы) */
+let TRAIL_PH = 0;
+const trailX = (y: number) => W / 2 + Math.sin(y * 0.0021 + TRAIL_PH) * 110 + Math.sin(y * 0.0061 + TRAIL_PH * 2) * 45;
+const onTrail = (x: number, y: number, r: number) => S.story && ["farm", "waste", "junk"].includes(CHAPTERS[CH].theme) && Math.abs(x - trailX(y)) < r + 34;
+/** твёрдое покрытие главы (асфальт, плиты, бетон): деревья и валуны там не растут */
+const onPave = (th: string, x: number) => S.story && ((th === "road" && Math.abs(x - W / 2) < 330) || (th === "town" && x > 215 && x < W - 215) || (th === "factory" && x > 160 && x < W - 160) || (th === "dam" && x > 250 && x < W - 250));
 const inField = (x: number, y: number, r: number) => FIELDS.some((f) => x > f.x - r - 34 && x < f.x + f.w + r + 34 && y > f.y - r - 40 && y < f.y + f.h + r + 30);
 function storyFree(x: number, y: number, r: number) {
   if (inRock(x, y, r + 10) || inField(x, y, r)) return false;
+  if (CHAPTERS[CH]?.theme === "factory" && x > W / 2 + 140 - r && x < W / 2 + 230 + r) return false; // рельсы
   if (GATES.some((g) => Math.abs(y - g) < r + 70)) return false;
   if (CAMPS.some((c) => Math.hypot(x - c.x, y - c.y) < r + 170)) return false;
   if (WEAPON_CRATES.some((c) => Math.hypot(x - c.x, y - c.y) < r + 90)) return false;
@@ -614,7 +621,7 @@ class Game extends Phaser.Scene {
     const th = S.story ? CHAPTERS[CH].theme : "farm";
     return {
       farm: ["hay_round", "hay_block", "well", "cart", "stump", "pumpkins", "scarecrow", "logs", "gravestone", "hay_round", "logs"],
-      road: ["cone", "cone", "barrier", "barrier", "fuel_pump", "sign_post", "sign_post", "logs", "stump", "trash_bin"],
+      road: ["cone", "cone", "barrier", "barrier", "tire_stack", "sign_post", "sign_post", "logs", "stump", "trash_bin"],
       town: ["hydrant", "bench", "trash_bin", "traffic_light", "mailbox", "bench", "hydrant", "cone", "sign_post", "trash_bin"],
       factory: ["pallet", "pallet", "gas_cyl", "toolbox", "valve", "valve", "barrier", "cone", "trash_bin", "ammo_crate"],
       dam: ["sandbags", "sandbags", "ammo_crate", "searchlight", "rock_moss", "rock_moss", "barrier", "gas_cyl", "sign_post"],
@@ -713,9 +720,12 @@ class Game extends Phaser.Scene {
     this.buildFlow();
     // свет и тени: тени от деревьев и камней
     this.light = new Lighting(this, START_T);
-    for (const o of this.obs) if (!o.low && !o.noSh) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
+    // нарисованные предметы (колодец, сено…) — силуэт сразу за ними: «деревянная» тень от них отрывается
+    for (const o of this.obs) if (!o.noSh && o.img.texture.key.startsWith("ob_")) this.light.addTree(o.img, 0.35);
+    for (const o of this.obs) if (!o.low && !o.noSh && !o.img.texture.key.startsWith("ob_")) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
     // высокие (k < 0) — тень как у дерева, от основания; широкие постройки и машины — силуэт сразу за ними
-    for (const [im, k] of this.artSh) k < 0 ? this.light.addTree(im, -k) : this.light.addDrop(im, k);
+    // k > 0 — тень лежит на земле от основания (сплющена в k раз), k < 0 — заборы: силуэт со сдвигом (они повёрнуты)
+    for (const [im, k] of this.artSh) k > 0 ? this.light.addTree(im, k) : this.light.addDrop(im, -k);
     this.player = new Humanoid(this, this.px, this.py, "hero", PAL_HERO, true);
     cam.startFollow(this.player.c, true, 0.15, 0.15);
     this.actSh = this.add.renderTexture(0, 0, 8, 8).setOrigin(0).setDepth(-3.55);
@@ -1226,6 +1236,7 @@ class Game extends Phaser.Scene {
     const MIX: Record<string, [number, number]> = { waste: [0.2, 0.75], junk: [0.15, 0.4], tunnel: [0.5, 0.9], farm: [0.45, 0.85], road: [0.4, 0.8], town: [0.25, 0.55], factory: [0.15, 0.7], dam: [0.35, 0.9] };
     const rnd = new Phaser.Math.RandomDataGenerator(["zombika"]);
     FIELDS = [];
+    TRAIL_PH = rnd.realInRange(0, 9);
     if (S.story) this.themeGround(th, rnd);
     // полуразрушенный дом недалеко от старта
     const st = S.story ? START : { x: W / 2, y: H / 2 };
@@ -1233,7 +1244,7 @@ class Game extends Phaser.Scene {
     this.walls = this.house.walls;
     const hs = this.house;
     const free = (x: number, y: number, r: number) =>
-      Math.hypot(x - st.x, y - st.y) > 220 && (!S.story || storyFree(x, y, r)) && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
+      Math.hypot(x - st.x, y - st.y) > 220 && (!S.story || (storyFree(x, y, r) && !onTrail(x, y, r))) && this.obs.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + r + 40) &&
       !(x > hs.bx0 - r - 40 && x < hs.bx1 + r + 40 && y > hs.by0 - r - 50 && y < hs.by1 + r + 30);
     /** дворы: дома, постройки, костры — под ними проплешина земли, к ним ведут тропинки */
     const yards = this.yards = [{ x: hs.cx, y: hs.by1 + 10, w: hs.bx1 - hs.bx0 + 60, h: 90, path: true as boolean }];
@@ -1254,7 +1265,7 @@ class Game extends Phaser.Scene {
         const y = rnd.between(500, H - 700);
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
-        this.artSh.push([im, 1]);
+        this.artSh.push([im, 0.4]);
         yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
@@ -1282,10 +1293,14 @@ class Game extends Phaser.Scene {
       for (let n = 0, tries = 0; n < want && tries < 900; tries++) {
         const name = rnd.pick(set), k = buildK(name), tex = this.textures.get("bd_" + name).getSourceImage();
         const w = tex.width / k, h = tex.height / k, tall = TALL.has(name), flat = name === "helipad";
-        const x = S.story ? (rnd.frac() < 0.5 ? rnd.between(200 + w / 2, W / 2 - 140 - w / 2) : rnd.between(W / 2 + 140 + w / 2, W - 200 - w / 2)) : rnd.between(300, W - 300);
+        // от середины полосы: шоссе шире, городская улица — уже
+        const half = bth === "road" ? 315 : bth === "town" ? 195 : 140, left = rnd.frac() < 0.5;
+        // рекламный щит — у самой обочины, лицом к дороге
+        const board = name === "billboard" && S.story;
+        const x = board ? W / 2 + (left ? -1 : 1) * (half + w / 2 + 10) : S.story ? (left ? rnd.between(200 + w / 2, W / 2 - half - w / 2) : rnd.between(W / 2 + half + w / 2, W - 200 - w / 2)) : rnd.between(300, W - 300);
         const y = rnd.between(400, H - 600);
-        if (!free(x, y, tall ? w * 0.4 : Math.max(w, h) * 0.42)) continue;
-        const flip = !tall && rnd.frac() < 0.5;
+        if (!free(x, y, tall ? w * 0.4 : board ? w * 0.3 : Math.max(w, h) * 0.42)) continue;
+        const flip = board ? !left : !tall && rnd.frac() < 0.5;
         const im = this.add.image(x, y, "bd_" + name).setDisplaySize(w, h).setFlipX(flip);
         const p: Prop = { id: 6000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         if (flat) { im.setDepth(-9); n++; continue; }
@@ -1293,11 +1308,11 @@ class Game extends Phaser.Scene {
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
-          this.artSh.push([im, -0.7]);
+          this.artSh.push([im, 0.6]);
           this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p, noSh: true });
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
-          this.artSh.push([im, 0.8]);
+          this.artSh.push([im, 0.4]);
           const ex = w * 0.36, ey = h * 0.24;
           p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
           this.walls.push(p.wall);
@@ -1308,7 +1323,7 @@ class Game extends Phaser.Scene {
     }
     // край мира — стена из ёлок
     for (let t = 0; t < Math.max(W, H); t += 70) {
-      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) if (x <= W && y <= H && !inRock(x, y)) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
+      for (const [x, y] of [[t, 10], [t, H - 10], [10, t], [W - 10, t]]) if (x <= W && y <= H && !inRock(x, y) && !(S.story && CHAPTERS[CH].theme === "dam" && (x < 275 || x > W - 275))) place(rnd.pick(["pine_1", "pine_2"]), x + rnd.between(-15, 15), y + rnd.between(-15, 15), rnd.between(110, 140), 26, 50);
     }
     // в сюжете по краям полосы — густой лес (дорога одна)
     if (S.story) for (let y = 60; y < H - 60; y += 46) for (const side of [0, 1]) {
@@ -1319,7 +1334,11 @@ class Game extends Phaser.Scene {
     for (let n = 0, tries = 0; n < nTrees && tries < 5000; tries++) {
       const x = rnd.between(80, W - 80), y = th === "tunnel" ? rnd.between(TUNNEL_Y + 60, H - 80) : rnd.between(80, H - 80);
       const kind = rnd.frac();
-      if (kind < MIX[th][0]) { if (free(x, y, 18) && !((th === "road" || th === "town") && Math.abs(x - W / 2) < 320)) { const s = rnd.between(110, 150); place(rnd.pick(TREES[th]), x, y, s, 15, s * 0.42); n++; } }
+      if (onPave(th, x) || onTrail(x, y, 20)) continue;
+      // плотина: по бокам вода — там только камни
+      if (S.story && th === "dam" && (x < 275 || x > W - 275) && kind < MIX[th][0]) continue;
+      if (S.story && th === "dam" && (x < 275 || x > W - 275) && kind >= MIX[th][1]) continue;
+      if (kind < MIX[th][0]) { if (free(x, y, 18)) { const s = rnd.between(110, 150); place(rnd.pick(TREES[th]), x, y, s, 15, s * 0.42); n++; } }
       else if (kind < MIX[th][1]) { const s = rnd.between(55, 110); if (free(x, y, s * 0.38)) { place(rnd.pick(["boulder_1", "boulder_2", "boulder_3"]), x, y, s, s * 0.38, 0); n++; } }
       else if (free(x, y, 14)) { place(rnd.pick(["dead_tree_1", "dead_tree_2"]), x, y, rnd.between(100, 130), 12, 45); n++; }
     }
@@ -1329,8 +1348,9 @@ class Game extends Phaser.Scene {
     const paved = (x: number) => th === "tunnel" || th === "waste" || (th === "junk" && x > 160 && x < W - 160) || (th === "road" && Math.abs(x - W / 2) < 300) || (th === "town" && x > 230 && x < W - 230) || (th === "factory" && x > 170 && x < W - 170) || th === "dam";
     for (let i = 0; i < Math.round(420 * (W * H) / 9e6); i++) {
       const dx = rnd.between(0, W), dy = rnd.between(0, H);
-      if (inHouse(hs, dx, dy, 10) || inRock(dx, dy) || (S.story && paved(dx) && rnd.frac() < (th === "waste" ? 0.6 : 0.9))) continue;
+      if (inHouse(hs, dx, dy, 10) || inRock(dx, dy) || inField(dx, dy, -20) || (S.story && paved(dx) && rnd.frac() < (th === "waste" ? 0.6 : 0.9))) continue;
       const key = rnd.pick(["grass_1", "grass_2", "grass_1", "flowers_1", "flowers_2", "flowers_3", "bush_red_full", "bush_blue_full", "stone", "stone_2", "grass_2", "flowers_1"]);
+      if (key.startsWith("bush") || key.startsWith("stone") ? onTrail(dx, dy, 10) || onPave(th, dx) : false) continue;
       const s = key.startsWith("bush") ? rnd.between(40, 60) : rnd.between(22, 40);
       this.add.image(dx, dy, key).setDisplaySize(s, s).setRotation(key.startsWith("grass") || key.startsWith("bush") ? 0 : rnd.realInRange(0, TAU)).setDepth(-5);
     }
@@ -1338,8 +1358,8 @@ class Game extends Phaser.Scene {
 
   /** земля главы поверх травы: дорога, площадь, цех, плотина, поля */
   /** пашня с неровным краем: узор t_farm внутри извилистого контура, по краю — бровка и травинки */
-  fieldImage(i: number, x: number, y: number, w: number, h: number, rnd: Phaser.Math.RandomDataGenerator) {
-    const m = 16, key = "field_" + i;
+  fieldImage(i: number | string, x: number, y: number, w: number, h: number, rnd: Phaser.Math.RandomDataGenerator, tex = "t_farm", fringe = true, wobK = 1, scK = 0.45) {
+    const m = 16 * wobK, key = "field_" + i;
     if (this.textures.exists(key)) this.textures.remove(key);
     const cv = document.createElement("canvas"); cv.width = w + m * 2; cv.height = h + m * 2;
     const c = cv.getContext("2d")!;
@@ -1352,25 +1372,25 @@ class Game extends Phaser.Scene {
       // скругление углов: подтягиваем к центру скругления
       const cxr = Math.min(Math.max(px, rr), w - rr), cyr = Math.min(Math.max(py, rr), h - rr), dx = px - cxr, dy = py - cyr, d = Math.hypot(dx, dy);
       if (d > rr) { px = cxr + (dx / d) * rr; py = cyr + (dy / d) * rr; }
-      const wob = Math.sin(t * 0.021 + ph[0]) * 7 + Math.sin(t * 0.067 + ph[1]) * 3.5 + rnd.realInRange(-1.5, 1.5);
+      const wob = (Math.sin(t * 0.021 + ph[0]) * 7 + Math.sin(t * 0.067 + ph[1]) * 3.5 + rnd.realInRange(-1.5, 1.5) + (fringe ? 0 : rnd.realInRange(-3, 3))) * wobK;
       pts.push([m + px + nx * wob, m + py + ny * wob]);
     }
     const path = () => { c.beginPath(); pts.forEach(([a, b], k) => (k ? c.lineTo(a, b) : c.moveTo(a, b))); c.closePath(); };
-    const src = this.textures.get("t_farm").getSourceImage() as CanvasImageSource & { width: number };
+    const src = this.textures.get(tex).getSourceImage() as CanvasImageSource & { width: number };
     const pat = c.createPattern(src, "repeat")!;
-    const sc = 0.45 * (512 / Math.max(256, src.width as number)) * (src.width as number >= 512 ? 1 : 2);
+    const sc = scK * (512 / Math.max(256, src.width as number)) * (src.width as number >= 512 ? 1 : 2);
     pat.setTransform(new DOMMatrix().scale(sc));
     path(); c.fillStyle = pat; c.fill();
     // бровка: тёмная полоса по краю внутри
     c.save(); path(); c.clip(); c.lineWidth = 10; c.strokeStyle = "rgba(60,40,20,0.35)"; path(); c.stroke(); c.restore();
     // травинки, налезающие на край
-    c.strokeStyle = "rgba(70,120,30,0.85)"; c.lineWidth = 1.5;
+    if (fringe) c.strokeStyle = "rgba(70,120,30,0.85)"; c.lineWidth = 1.5;
     for (let k = 0; k < pts.length; k += 1) for (let j = 0; j < 2; j++) {
       const [a, b] = pts[k], ox = rnd.realInRange(-4, 4), oy = rnd.realInRange(-4, 4);
       c.beginPath(); c.moveTo(a + ox, b + oy); c.lineTo(a + ox + rnd.realInRange(-3, 3), b + oy - rnd.realInRange(4, 9)); c.stroke();
     }
     this.textures.addCanvas(key, cv);
-    this.add.image(x - m, y - m, key).setOrigin(0).setDepth(-9.6);
+    return this.add.image(x - m, y - m, key).setOrigin(0).setDepth(-9.6);
   }
   /** живая земля: проплешины под дворами, кривые тропинки, пятна тёмной/сухой травы, цветы кучками */
   groundPatches(th: string, yards: { x: number; y: number; w: number; h: number; path: boolean }[], rnd: Phaser.Math.RandomDataGenerator) {
@@ -1386,9 +1406,18 @@ class Game extends Phaser.Scene {
     const trails: [{ x: number; y: number }[], number][] = [];
     const trail = (pts: { x: number; y: number }[], wid: number) => { trails.push([pts, wid]); };
     const drawTrails = () => {
-      for (const [k, col] of [[1.35, 0x6a5232], [1.0, 0x7d6140], [0.5, 0x8c6f4a]] as const) for (const [pts, wid] of trails) g.lineStyle(wid * k, col, 1).strokePoints(pts, false);
-      // концы и узлы — кружки той же краской, чтобы не было «рубленых» торцов
-      for (const [pts, wid] of trails) for (const q of [pts[0], pts[pts.length - 1]]) { g.fillStyle(0x6a5232, 1).fillCircle(q.x, q.y, wid * 0.67); g.fillStyle(0x7d6140, 1).fillCircle(q.x, q.y, wid * 0.5); }
+      // тропа из «клякс» вытоптанной земли (та же текстура, что под домами): рваный край, без ровных линий
+      for (const [pts, wid] of trails) {
+        let acc = 0;
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i], L = Math.hypot(b.x - a.x, b.y - a.y), step = wid * 0.38;
+          for (let d = (step - acc) % step; d < L; d += step) {
+            const t = d / L, x = a.x + (b.x - a.x) * t + rnd.between(-3, 3), y = a.y + (b.y - a.y) * t + rnd.between(-3, 3), s = wid * rnd.realInRange(1.25, 1.7);
+            this.add.image(x, y, "gp_dirt" + rnd.between(0, 3)).setDisplaySize(s, s * rnd.realInRange(0.75, 1)).setRotation(rnd.realInRange(0, TAU)).setDepth(-9.86).setTint(tint);
+          }
+          acc = (acc + L) % step;
+        }
+      }
       // камешки и травинки по тропе
       for (const [pts, wid] of trails) for (let i = 0; i < pts.length; i += 2) {
         if (rnd.frac() < 0.45) g.fillStyle(0x9a9284, 0.9).fillEllipse(pts[i].x + rnd.between(-wid / 3, wid / 3), pts[i].y + rnd.between(-wid / 3, wid / 3), rnd.between(2, 5), rnd.between(2, 4));
@@ -1409,8 +1438,7 @@ class Game extends Phaser.Scene {
     const doors = yards.filter((y) => y.path).map((y) => ({ x: y.x, y: y.y + y.h * 0.45 }));
     if (S.story) {
       // главная тропа вдоль полосы (на шоссе и в городе её закрывает асфальт)
-      const ph = rnd.realInRange(0, 9), main: { x: number; y: number }[] = [];
-      const mx = (y: number) => W / 2 + Math.sin(y * 0.0021 + ph) * 110 + Math.sin(y * 0.0061 + ph * 2) * 45;
+      const main: { x: number; y: number }[] = [], mx = trailX;
       for (let y = H; y >= 0; y -= 24) main.push({ x: mx(y), y });
       trail(main, 44);
       for (const d of doors) { const ty = d.y + rnd.between(60, 220); trail(curve(d.x, d.y, mx(ty), ty), 24); }
@@ -1448,6 +1476,11 @@ class Game extends Phaser.Scene {
     } else if (th === "road") {
       band("t_asphalt", cx - 270, 540);
       g.fillStyle(0x8a7a5a, 0.85).fillRect(cx - 300, 0, 30, H).fillRect(cx + 270, 0, 30, H);
+      // обочина с рваным краем: кляксы утоптанной земли поверх края асфальта и травы
+      for (const ex of [cx - 290, cx + 290]) for (let y = -20; y < H + 20; y += rnd.between(16, 26)) {
+        const sz = rnd.between(46, 84);
+        this.add.image(ex + rnd.between(-10, 10) + (ex < cx ? -8 : 8), y, "gp_dirt" + rnd.between(0, 3)).setDisplaySize(sz, sz * rnd.realInRange(0.7, 1)).setRotation(rnd.realInRange(0, 6.28)).setDepth(-9.55).setTint(CHAPTERS[CH].tint);
+      }
       g.fillStyle(0xe8e4d8, 0.85).fillRect(cx - 258, 0, 6, H).fillRect(cx + 252, 0, 6, H);
       g.fillStyle(0xf0c840, 0.9);
       for (let y = 0; y < H; y += 96) g.fillRect(cx - 4, y, 8, 50);
@@ -1466,9 +1499,14 @@ class Game extends Phaser.Scene {
     } else if (th === "waste") {
       band("t_waste", 0, W, 0, H, 0.5);
       // старая разбитая дорога: куски асфальта с провалами
-      for (let y = 0; y < H; y += rnd.between(160, 320)) { const h = rnd.between(120, 260), ox = rnd.between(-30, 30); band("t_asphalt", cx - 110 + ox, 220, y, h, 0.5).setAlpha(0.6).setTint(0xc8b8a0); y += h; }
+      for (let y = 0; y < H; y += rnd.between(160, 320)) { const h = rnd.between(120, 260), ox = rnd.between(-30, 30); this.fieldImage("wa" + y, cx - 110 + ox, y, 220, h, rnd, "t_asphalt", false, 2.2, 0.5).setAlpha(0.75).setTint(0xc8b8a0); y += h; }
     } else if (th === "junk") {
       band("t_junk", 150, W - 300, 0, H, 0.5);
+      // рваный край свалки: кляксы земли по границе с травой
+      for (const ex of [150, W - 150]) for (let y = -20; y < H + 20; y += rnd.between(18, 30)) {
+        const sz = rnd.between(50, 95);
+        this.add.image(ex + rnd.between(-14, 14), y, "gp_dirt" + rnd.between(0, 3)).setDisplaySize(sz, sz * rnd.realInRange(0.7, 1)).setRotation(rnd.realInRange(0, 6.28)).setDepth(-9.55).setTint(0x8a7a60);
+      }
       // сетка-рабица по краям свалки
       g.lineStyle(2, 0x8a8a86, 0.7);
       for (const x of [150, W - 150]) { g.lineBetween(x, 0, x, H); for (let y = 0; y < H; y += 60) g.lineBetween(x - 4, y, x + 4, y + 60).lineBetween(x + 4, y, x - 4, y + 60); }
@@ -1623,7 +1661,7 @@ class Game extends Phaser.Scene {
     }
     // заборы (поломанные пролёты)
     for (let n = 0, tries = 0; n < 6 && tries < 300; tries++) {
-      const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200), a = rnd.pick([0, Math.PI / 2, rnd.realInRange(-0.4, 0.4)]);
+      const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200), a = rnd.pick([0, 0, rnd.realInRange(-0.35, 0.35)]); // поперёк (90°) забор сверху похож на лестницу
       const k = rnd.between(2, 4), c = Math.cos(a), s = Math.sin(a);
       let ok = true;
       for (let i = 0; i < k; i++) if (!free(x + c * i * 80, y + s * i * 80, 44)) ok = false;
@@ -1633,7 +1671,7 @@ class Game extends Phaser.Scene {
         const fx = x + c * i * 80, fy = y + s * i * 80;
         const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(84, 26).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
         const p = add("fence", fx, fy, 5, im);
-        p.wall = box(fx, fy, 40, 3, a, 14);
+        p.wall = box(fx, fy, 40, 3, a, 14); p.wall.art = true; this.artSh.push([im, -1.5]);
         this.walls.push(p.wall);
       }
       n++;
@@ -1643,7 +1681,7 @@ class Game extends Phaser.Scene {
       const seg = (fx: number, fy: number, a: number) => {
         const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(64, 20).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
         const p = add("fence", fx, fy, 4, im);
-        p.wall = box(fx, fy, 30, 3, a, 12); this.walls.push(p.wall);
+        p.wall = box(fx, fy, 30, 3, a, 12); p.wall.art = true; this.artSh.push([im, -1.5]); this.walls.push(p.wall);
       };
       const x0 = f.x - 14, x1 = f.x + f.w + 14, y0 = f.y - 16, y1 = f.y + f.h + 12;
       const nx = Math.max(2, Math.round((x1 - x0) / 62)), ny = Math.max(2, Math.round((y1 - y0) / 62));
@@ -1661,7 +1699,7 @@ class Game extends Phaser.Scene {
         const tex = this.textures.get("bd_tractor").getSourceImage(), k = buildK("tractor"), w = tex.width / k, h = tex.height / k;
         const tx = f.x + f.w * (1 - sx), ty = f.y + f.h * rnd.realInRange(0.4, 0.6);
         const im = this.add.image(tx, ty, "bd_tractor").setDisplaySize(w, h).setFlipX(rnd.frac() < 0.5).setOrigin(0.5, 0.85).setY(ty + h * 0.25).setDepth(ty + h * 0.15);
-        this.artSh.push([im, 0.8]);
+        this.artSh.push([im, 0.4]);
         const p = add("deco", tx, ty, 999, im);
         p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; this.walls.push(p.wall);
       }
@@ -1745,7 +1783,8 @@ class Game extends Phaser.Scene {
     if (p.kind === "drum") { p.hp = 999; return; } // синюю бочку не взорвать — просто вмятины
     p.dead = true;
     if (NET.role === "host") send({ t: "prop", id: p.id });
-    if (p.ob) { this.obs = this.obs.filter((o) => o !== p.ob); this.light.removeShadow(p.img); }
+    if (p.ob) this.obs = this.obs.filter((o) => o !== p.ob);
+    this.light.removeShadow(p.img);
     p.img.destroy();
     if (p.wall) this.walls = this.walls.filter((w) => w !== p.wall);
     this.buildGrid(); this.flowCell = -1;

@@ -234,7 +234,7 @@ export class Lighting {
   /** убрать тень предмета (бочку взорвали, ящик разбили) */
   addDrop(img: Phaser.GameObjects.Image, k = 1) {
     const sh = this.scene.add.image(img.x, img.y, img.texture.key).setOrigin(img.originX, img.originY)
-      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipX(img.flipX).setTintFill(0x000000).setDepth(-3.6);
+      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipX(img.flipX).setRotation(img.rotation).setTintFill(0x000000).setDepth(-3.6);
     this.drops.push({ img, sh, k });
   }
   removeShadow(img: Phaser.GameObjects.Image) {
