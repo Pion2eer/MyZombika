@@ -25,6 +25,9 @@ const PROP_STYLE =
 
 // имя: [папка, ширина, высота (в файле, ×4 от экрана), подсказка]
 const ITEMS = {
+  // финальный босс «Хозяин»: образец для слайсовой модели (src/main.ts, zBoss)
+  boss_ref: ["props", 512, 512, "Final boss of the game: a gigantic hulking zombie mutant, twice as wide as a man, hunched, tiny bald head sunk between huge shoulders, grey-purple rotting skin with red exposed flesh, glowing yellow eyes, one arm a massive swollen club, rusty iron plates bolted to chest and shoulders with chains, torn black rags, a burning fuel tank strapped to its back leaking fire. Whole body visible, standing, menacing."],
+  boss_top: ["props", 512, 512, "The same gigantic hulking zombie mutant boss seen from HIGH ABOVE, almost straight top-down like the game camera: we see the top of the small bald head, the huge rusty iron shoulder plates, the hunched back with a burning fuel tank, two thick arms to the sides (one a massive swollen club). Grey-purple skin, red flesh, black rags, chains."],
   heart: ["ui", 120, 120, "A glossy red heart, health icon."],
   shield: ["ui", 112, 112, "A blue steel shield with a vertical seam, armor icon."],
   wave: ["ui", 104, 104, "A pale green zombie skull with glowing red eyes, front view."],
