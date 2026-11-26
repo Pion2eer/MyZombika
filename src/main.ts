@@ -305,9 +305,12 @@ class Humanoid {
         g.lineStyle(4 * b, skin).lineBetween(e.x, e.y, h.x, h.y).fillStyle(skin).fillCircle(e.x, e.y, 2.1 * b);
         g.fillStyle(0xb84a3c).fillCircle(e.x + 1, e.y - 0.5, 0.9 * b).fillCircle((s.x + e.x) / 2, (s.y + e.y) / 2, 0.7 * b);
         if (isClub) {
-          const R0 = 5.2 * b;
-          g.fillStyle(OUT).fillCircle(h.x, h.y, R0 + 1.2).fillStyle(this.pal.SKIN_SH).fillCircle(h.x, h.y, R0).fillStyle(skin).fillCircle(h.x - 0.8, h.y - 1, R0 * 0.8);
-          for (let k = 0; k < 5; k++) { const q = (k / 5) * TAU + 0.6; g.fillStyle(k % 2 ? 0xb84a3c : 0x9a3428).fillCircle(h.x + Math.cos(q) * R0 * 0.55, h.y + Math.sin(q) * R0 * 0.5, R0 * 0.24); }
+          // раздутая кисть-дубина: несколько опухолей разного размера, тень снизу, пара язв
+          const R0 = 4.2 * b, L = [[0, 0, 1], [0.55, -0.35, 0.62], [-0.5, 0.3, 0.58], [0.2, 0.6, 0.5], [-0.35, -0.55, 0.45]] as const;
+          for (const [dx, dy, k] of L) g.fillStyle(OUT).fillCircle(h.x + dx * R0, h.y + dy * R0, R0 * k + 1.1);
+          for (const [dx, dy, k] of L) g.fillStyle(this.pal.SKIN_SH).fillCircle(h.x + dx * R0, h.y + dy * R0, R0 * k);
+          for (const [dx, dy, k] of L) g.fillStyle(skin).fillCircle(h.x + dx * R0 - 0.6, h.y + dy * R0 - 0.8, R0 * k * 0.72);
+          g.fillStyle(0x9a3428).fillCircle(h.x + R0 * 0.3, h.y + R0 * 0.1, R0 * 0.22).fillStyle(0xb84a3c).fillCircle(h.x - R0 * 0.4, h.y + R0 * 0.35, R0 * 0.16);
         } else {
           g.fillStyle(OUT).fillCircle(h.x, h.y, 3.3 * b).fillStyle(skin).fillCircle(h.x, h.y, 2.5 * b);
           for (const f of [-1, 0, 1]) g.fillStyle(0xe8d8b0).fillCircle(h.x + Math.cos(a + f * 0.5) * 2.8 * b, h.y + Math.sin(a + f * 0.5) * 2.8 * b, 0.55 * b); // когти
@@ -578,7 +581,7 @@ interface Prop { id: number; kind: PropKind; x: number; y: number; hp: number; i
   /** свет: костёр — всегда (ночью ярче), фонарь — ночью; flick — сила мерцания */
   light?: { dx: number; dy: number; r: number; col: number; a: number; flick: number; night: boolean }; fire?: Phaser.GameObjects.Particles.ParticleEmitter }
 /** горящее пятно после взрыва бочки: жжёт, светится, гаснет */
-interface Burn { x: number; y: number; t: number; fire: Phaser.GameObjects.Particles.ParticleEmitter; tick: number }
+interface Burn { x: number; y: number; t: number; fire: Phaser.GameObjects.Particles.ParticleEmitter; tick: number; /** огненный след босса: свет слабее (иначе десяток пятен выжигает картинку в белое) */ trail?: boolean }
 /** где у дерева на картинке основание ствола (доля высоты): картинка ставится основанием в точку ствола */
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
 /** вид снаряда: ракета, огонь, бронебойная, зажигательная (без — обычная пуля) */
@@ -2010,7 +2013,11 @@ class Game extends Phaser.Scene {
       const k = l.night ? Math.max(0, (night - 0.25) / 0.75) : 0.25 + night * 0.75;
       out.push({ x, y, r: l.r * (0.92 + f * 0.08), col: l.col, a: l.a * f * k });
     }
-    for (const b of this.burns) out.push({ x: b.x, y: b.y - 4, r: 170, col: 0xff7a20, a: Math.min(1, b.t / 1.5) * (0.5 + night * 0.5) * (0.85 + Math.random() * 0.15) });
+    let tn = 0;
+    for (const b of this.burns) {
+      if (b.trail && tn++ % 4) continue; // от следа — каждый четвёртый, тусклее
+      out.push({ x: b.x, y: b.y - 4, r: b.trail ? 120 : 170, col: 0xff7a20, a: Math.min(1, b.t / 1.5) * (0.5 + night * 0.5) * (b.trail ? 0.45 : 1) * (0.85 + Math.random() * 0.15) });
+    }
     for (const b of this.booms) { const k = 1 - b.t / 0.55; if (k > 0) out.push({ x: b.x, y: b.y, r: 280, col: 0xffa040, a: k * k * (0.35 + night * 1.1) }); }
     L.extra = out;
   }
@@ -2298,7 +2305,7 @@ class Game extends Phaser.Scene {
       const [sk, pal] = kind === "zombie" ? ["zA", PAL_ZOMBIE_A] as const : kind === "spitter" ? ["zC", PAL_ZOMBIE_C] as const
         : kind === "armored" ? ["zD", PAL_ZOMBIE_D] as const : kind === "brute" ? ["zE", PAL_ZOMBIE_E] as const : kind === "bloater" ? ["zF", PAL_ZOMBIE_F] as const : kind === "boss" ? ["zBoss", PAL_BOSS] as const : ["zB", PAL_ZOMBIE_B] as const;
       e.hum = new Humanoid(this, x, y, sk, pal, false);
-      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; e.hum.bulk = 1.3; e.hum.club = -1; e.tankFx = this.flames(x, y, 1.1); }
+      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; e.hum.bulk = 1.3; e.hum.club = -1; e.tankFx = this.flames(x, y, 0.75); }
       if (kind === "spitter") e.throwT = rand(1.5, 3);
       if (kind === "armored") { e.arm = ARMOR_PTS; e.hum.setArmor(true); }
       e.c = e.hum.c;
@@ -2420,7 +2427,7 @@ class Game extends Phaser.Scene {
   }
   /** горящая земля (огненный след босса): жжёт игроков, видна всем */
   addBurn(x: number, y: number, t: number) {
-    this.burns.push({ x, y, t, fire: this.flames(x, y - 2, 0.8), tick: 0 });
+    this.burns.push({ x, y, t, fire: this.flames(x, y - 2, 0.55), tick: 0, trail: true });
     if (NET.role === "host") send({ t: "burn", x: x | 0, y: y | 0, tt: t });
   }
 
@@ -3787,7 +3794,7 @@ class Game extends Phaser.Scene {
       case "hi": pendingHi = m; this.applyHi(m); if (m.name) S.myName = m.name; break;
       case "chat": this.addChat(String(m.who), String(m.text).slice(0, 120)); break;
       case "kill": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) this.kill(e, m.dir); break; }
-      case "burn": this.burns.push({ x: m.x, y: m.y, t: m.tt, fire: this.flames(m.x, m.y - 2, 0.8), tick: 99 }); break;
+      case "burn": this.burns.push({ x: m.x, y: m.y, t: m.tt, fire: this.flames(m.x, m.y - 2, 0.55), tick: 99, trail: true }); break;
       case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm, !!m.legs); sfx("hit", this.near(e.x, e.y)); } break; }
       case "boom": this.explode(m.x, m.y, m.p || 1); break;
       case "prop": { const p = this.props.find((q) => q.id === m.id); if (p) this.breakProp(p, true); break; }
