@@ -222,7 +222,7 @@ export class Lighting {
    * на высоту × длину (контейнер повёрнут по солнцу и растянут вдоль него).
    */
   addCaster(img: Phaser.GameObjects.Image, height: number) {
-    const sh = this.scene.make.image({ key: img.texture.key }, false).setDisplaySize(img.displayWidth, img.displayHeight).setTintFill(0x000000);
+    const sh = this.scene.make.image({ key: silTex(this.scene, img.texture.key), frame: img.frame.name }, false).setDisplaySize(img.displayWidth, img.displayHeight);
     const c = this.scene.add.container(img.x, img.y, [sh]).setDepth(-3.6);
     this.casters.push({ img, c, sh, h: height, size: img.displayWidth * 0.7 });
   }
@@ -233,8 +233,8 @@ export class Lighting {
    */
   /** убрать тень предмета (бочку взорвали, ящик разбили) */
   addDrop(img: Phaser.GameObjects.Image, k = 1) {
-    const sh = this.scene.add.image(img.x, img.y, img.texture.key).setOrigin(img.originX, img.originY)
-      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipX(img.flipX).setRotation(img.rotation).setTintFill(0x000000).setDepth(-3.6);
+    const sh = this.scene.add.image(img.x, img.y, silTex(this.scene, img.texture.key), img.frame.name).setOrigin(img.originX, img.originY)
+      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipX(img.flipX).setRotation(img.rotation).setDepth(-3.6);
     this.drops.push({ img, sh, k });
   }
   removeShadow(img: Phaser.GameObjects.Image) {
@@ -251,8 +251,8 @@ export class Lighting {
     // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер.
     // У нарисованных построек/предметов тень крепим к самому нижнему непрозрачному ряду (колёса, фундамент), а не к точке опоры
     const b = artBase(img), oy = (b ?? img.originY) - lift;
-    const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - oy)
-      .setDisplaySize(img.displayWidth, img.displayHeight * sq).setFlipY(true).setFlipX(img.flipX).setTintFill(0x000000);
+    const sh = this.scene.make.image({ key: silTex(this.scene, img.texture.key), frame: img.frame.name }, false).setOrigin(img.originX, 1 - oy)
+      .setDisplaySize(img.displayWidth, img.displayHeight * sq).setFlipY(true).setFlipX(img.flipX);
     const c = this.scene.add.container(img.x, img.y + (oy - img.originY) * img.displayHeight, [sh]).setDepth(-3.6);
     this.trees.push({ img, c, sh });
   }
@@ -596,10 +596,29 @@ export function artFootprint(img: Phaser.GameObjects.Image, depth: number): { x:
     FOOT.set(key, uv);
   }
   if (uv.length < 3) return null;
-  const W = img.displayWidth, H = img.displayHeight, fx = img.flipX ? -1 : 1, out: { x: number; y: number }[] = [];
-  for (const p of uv) {
-    const x = img.x + fx * (p.u - 0.5) * W + (0.5 - img.originX) * W, y = img.y + (p.v - img.originY) * H;
-    out.push({ x, y: y - 2 }, { x, y: y - depth * H });
-  }
+  const W = img.displayWidth, H = img.displayHeight, fx = img.flipX ? -1 : 1;
+  const front = uv.map((p) => ({ x: img.x + fx * (p.u - 0.5) * W + (0.5 - img.originX) * W, y: img.y + (p.v - img.originY) * H - 2 }));
+  // нижний край картинки — это передние рёбра следа. Задние рёбра параллельны им и проходят через крайние точки слева и справа:
+  // след — параллелограмм, задний край = передний, отражённый через середину между крайними точками (2M − p).
+  let L = front[0], R = front[0];
+  for (const p of front) { if (p.x < L.x) L = p; if (p.x > R.x) R = p; }
+  const mx = (L.x + R.x) / 2, my = (L.y + R.y) / 2, out: { x: number; y: number }[] = [];
+  for (const p of front) out.push(p, { x: 2 * mx - p.x, y: Math.min(2 * my - p.y, p.y) }, { x: p.x, y: p.y - depth * H });
   return out;
+}
+
+/**
+ * Чёрный силуэт текстуры (те же кадры). Нужен вместо setTintFill: заливка тинтом оставляет на полупрозрачном краю
+ * цвет самой картинки, и у тени появляется светлый контур. Здесь цвет каждого пикселя — чёрный, прозрачность — как у картинки.
+ */
+export function silTex(scene: Phaser.Scene, key: string): string {
+  const sk = key + "#sil";
+  if (scene.textures.exists(sk)) return sk;
+  const t = scene.textures.get(key), src = t.getSourceImage() as HTMLImageElement | HTMLCanvasElement;
+  const cv = document.createElement("canvas"); cv.width = src.width; cv.height = src.height;
+  const c = cv.getContext("2d")!;
+  c.drawImage(src, 0, 0); c.globalCompositeOperation = "source-in"; c.fillStyle = "#000"; c.fillRect(0, 0, cv.width, cv.height);
+  const nt = scene.textures.addCanvas(sk, cv)!;
+  for (const name of t.getFrameNames()) { const f = t.get(name); nt.add(name, 0, f.cutX, f.cutY, f.cutWidth, f.cutHeight); }
+  return sk;
 }
