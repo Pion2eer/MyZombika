@@ -245,10 +245,12 @@ export class Lighting {
     this.trees = this.trees.filter((t) => t.img !== img);
     this.casters = this.casters.filter((c) => c.img !== img);
   }
-  addTree(img: Phaser.GameObjects.Image, sq = 1) {
+  /** lift — на сколько (доля высоты картинки) поднять ось тени над нижним рядом: у нарисованных в 3/4 предметов
+   *  земля под ними — это полоса, а не линия, и тень должна начинаться из-под середины предмета, а не от переднего края */
+  addTree(img: Phaser.GameObjects.Image, sq = 1, lift = 0) {
     // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер.
     // У нарисованных построек/предметов тень крепим к самому нижнему непрозрачному ряду (колёса, фундамент), а не к точке опоры
-    const b = artBase(img), oy = b ?? img.originY;
+    const b = artBase(img), oy = (b ?? img.originY) - lift;
     const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - oy)
       .setDisplaySize(img.displayWidth, img.displayHeight * sq).setFlipY(true).setFlipX(img.flipX).setTintFill(0x000000);
     const c = this.scene.add.container(img.x, img.y + (oy - img.originY) * img.displayHeight, [sh]).setDepth(-3.6);

@@ -36,6 +36,7 @@ const onPave = (th: string, x: number) => S.story && ((th === "road" && Math.abs
 const inField = (x: number, y: number, r: number) => FIELDS.some((f) => x > f.x - r - 34 && x < f.x + f.w + r + 34 && y > f.y - r - 40 && y < f.y + f.h + r + 30);
 function storyFree(x: number, y: number, r: number) {
   if (inRock(x, y, r + 10) || inField(x, y, r)) return false;
+  if (CH === CHAPTERS.length - 1 && Math.hypot(x - W / 2, y - EXIT_Y) < r + 240) return false; // вертолётная площадка
   if (CHAPTERS[CH]?.theme === "factory" && x > W / 2 + 140 - r && x < W / 2 + 230 + r) return false; // рельсы
   if (GATES.some((g) => Math.abs(y - g) < r + 70)) return false;
   if (CAMPS.some((c) => Math.hypot(x - c.x, y - c.y) < r + 170)) return false;
@@ -182,7 +183,9 @@ const PAL_MATE: Palette = {
   FUR: PAL_HERO.FUR.map((c) => recolor(c, 0.5, 0.75, 1.6)), FUR_DARK: PAL_HERO.FUR_DARK.map((c) => recolor(c, 0.5, 0.75, 1.6)),
 };
 /** в бронежилете: безрукавка становится оливковым жилетом с тёмными ремнями */
-const withVest = (p: Palette): Palette => ({ ...p, FUR: [0x56613a, 0x4a5530, 0x3f482b], LACE: 0x22221c, BRASS: 0x8a8a70 });
+/** броня на герое: стальной бронежилет (цвет как у полоски брони) и каска — видно издалека */
+const withVest = (p: Palette): Palette => ({ ...p, FUR: [0x6e82a0, 0x5a6c88, 0x485870], FUR_DARK: [0x3a4658, 0x323c4c, 0x2a3240], LACE: 0x1e242e, BRASS: 0xc8d2e0 });
+const withHelmet = (p: Palette): Palette => ({ ...p, HAIR: [0x6a7a92, 0x5a6a80, 0x7c8ca4, 0x4a586c] });
 /** метатель: раздутый, желтушная кожа, лиловое тряпьё */
 const PAL_ZOMBIE_C: Palette = {
   ...PAL_ZOMBIE_A,
@@ -265,10 +268,26 @@ class Humanoid {
         g.fillStyle(0x2e1410).fillCircle(s.x, s.y, 3.2).fillStyle(0x8a1a14).fillCircle(s.x, s.y, 2.2);
         return;
       }
-      sg.lineBetween(s.x, s.y, h.x, h.y).fillCircle(h.x, h.y, 2.9);
-      g.lineStyle(5.2, 0x2e2014).lineBetween(s.x, s.y, h.x, h.y);
-      g.lineStyle(3.4, skin).lineBetween(s.x, s.y, h.x, h.y);
-      g.fillStyle(0x2e2014).fillCircle(h.x, h.y, 2.9).fillStyle(skin).fillCircle(h.x, h.y, 2.1);
+      // локоть: рука сгибается наружу и чуть вниз, тем сильнее, чем ближе кисть к плечу
+      const su = 0.3, sv = side * ARM_V * VOX, du = hu - su, dv = hv - sv, dz = hz - ARM_Z, d = Math.hypot(du, dv, dz);
+      const bend = Math.min(4.2, Math.sqrt(Math.max(0, 8.2 ** 2 - (d / 2) ** 2)));
+      const e = P((su + hu) / 2 - 0.6, (sv + hv) / 2 + side * bend * 0.85, (ARM_Z + hz) / 2 - 1 - bend * 0.35);
+      const OUT = 0x2e2014, sleeve = this.armored ? 0x5e6e82 : this.pal.FUR[1], cuff = this.armored ? 0x3a4452 : this.pal.FUR[2];
+      sg.lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y).fillCircle(h.x, h.y, 2.9);
+      // контур
+      g.lineStyle(6.2, OUT).lineBetween(s.x, s.y, e.x, e.y).lineStyle(5, OUT).lineBetween(e.x, e.y, h.x, h.y);
+      g.fillStyle(OUT).fillCircle(s.x, s.y, 3.3).fillCircle(e.x, e.y, 2.7);
+      // плечо в рукаве, предплечье — кожа, сужается к запястью
+      g.lineStyle(4.4, sleeve).lineBetween(s.x, s.y, e.x, e.y).fillStyle(sleeve).fillCircle(s.x, s.y, 2.4);
+      g.lineStyle(1.2, cuff).lineBetween(s.x + (e.x - s.x) * 0.82, s.y + (e.y - s.y) * 0.82, e.x, e.y);
+      g.fillStyle(skin).fillCircle(e.x, e.y, 1.75);
+      const wx = e.x + (h.x - e.x) * 0.78, wy = e.y + (h.y - e.y) * 0.78;
+      g.lineStyle(3.3, skin).lineBetween(e.x, e.y, wx, wy);
+      // кисть: ладонь, пальцы вперёд по ходу предплечья и большой палец
+      const fl = Math.max(0.01, Math.hypot(h.x - e.x, h.y - e.y)), fx = (h.x - e.x) / fl, fy = (h.y - e.y) / fl;
+      g.fillStyle(OUT).fillCircle(h.x, h.y, 3).fillCircle(h.x + fx * 1.6, h.y + fy * 1.6, 2.4);
+      g.fillStyle(skin).fillCircle(h.x, h.y, 2.2).fillCircle(h.x + fx * 1.6, h.y + fy * 1.6, 1.6);
+      g.fillStyle(OUT).fillCircle(h.x - fy * side * 1.9, h.y + fx * side * 1.9, 1.3).fillStyle(skin).fillCircle(h.x - fy * side * 1.9, h.y + fx * side * 1.9, 0.75);
     };
     if (this.gun && this.weapon === "grenade") {
       // граната: правая рука занесена с гранатой, левая вытянута вперёд; бросок — рука уходит вперёд
@@ -435,6 +454,9 @@ class Humanoid {
     this.armored = on;
     const f = this.body.frame.name;
     this.body.setTexture(key, f);
+    // каска — только у героев (у зомби в латах свой шлем в палитре)
+    const hk = on ? `${this.skin}A_head` : `${this.skin}_head`;
+    if (this.body.scene.textures.exists(hk) && this.body.scene.textures.exists(`${this.skin}A_head`)) this.head.setTexture(hk, this.head.frame.name);
   }
 }
 
@@ -579,7 +601,7 @@ class Game extends Phaser.Scene {
   house?: House;
   walls: WallBox[] = [];
   /** тени нарисованных построек и машин: картинка и сплющенность силуэта */
-  artSh: [Phaser.GameObjects.Image, number][] = [];
+  artSh: [Phaser.GameObjects.Image, number, number?][] = [];
   yards: { x: number; y: number; w: number; h: number; path: boolean }[] = [];
   bullets: Bullet[] = [];
   bg!: Phaser.GameObjects.Graphics;
@@ -683,6 +705,8 @@ class Game extends Phaser.Scene {
     makeItem(this, "it_fuel", ammoVox(0xb02a1a, 0xe8d8a0, true), 16, 0.7);
     makeStack(this, "heroA_body", withVest(PAL_HERO), "body");
     makeStack(this, "mateA_body", withVest(PAL_MATE), "body");
+    makeStack(this, "heroA_head", withHelmet(PAL_HERO), "head");
+    makeStack(this, "mateA_head", withHelmet(PAL_MATE), "head");
     makeItem(this, "it_armor", armorVox(), 18, 0.6);
     makeItem(this, "it_grenade", grenadeVox(), 16, 0.75);
     makeItem(this, "it_medkit", medkitVox(), 20, 0.55);
@@ -721,11 +745,11 @@ class Game extends Phaser.Scene {
     // свет и тени: тени от деревьев и камней
     this.light = new Lighting(this, START_T);
     // нарисованные предметы (колодец, сено…) — силуэт сразу за ними: «деревянная» тень от них отрывается
-    for (const o of this.obs) if (!o.noSh && o.img.texture.key.startsWith("ob_")) this.light.addTree(o.img, 0.35);
+    for (const o of this.obs) if (!o.noSh && o.img.texture.key.startsWith("ob_")) this.light.addTree(o.img, 0.35, 0.1);
     for (const o of this.obs) if (!o.low && !o.noSh && !o.img.texture.key.startsWith("ob_")) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
     // высокие (k < 0) — тень как у дерева, от основания; широкие постройки и машины — силуэт сразу за ними
     // k > 0 — тень лежит на земле от основания (сплющена в k раз), k < 0 — заборы: силуэт со сдвигом (они повёрнуты)
-    for (const [im, k] of this.artSh) k > 0 ? this.light.addTree(im, k) : this.light.addDrop(im, -k);
+    for (const [im, k, lift] of this.artSh) k > 0 ? this.light.addTree(im, k, lift ?? 0.2) : this.light.addDrop(im, -k);
     this.player = new Humanoid(this, this.px, this.py, "hero", PAL_HERO, true);
     cam.startFollow(this.player.c, true, 0.15, 0.15);
     this.actSh = this.add.renderTexture(0, 0, 8, 8).setOrigin(0).setDepth(-3.55);
@@ -1265,7 +1289,7 @@ class Game extends Phaser.Scene {
         const y = rnd.between(500, H - 700);
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
-        this.artSh.push([im, 0.4]);
+        this.artSh.push([im, 0.4, 0.12]);
         yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
@@ -1285,11 +1309,16 @@ class Game extends Phaser.Scene {
         junk: ["container_blue", "container_red", "forklift", "crane", "truck_wreck", "boat", "tractor", "spool"],
         factory: ["factory", "chimney", "container_blue", "container_red", "pipes", "forklift", "water_tank", "spool", "generator"],
         tunnel: ["truck_wreck", "generator", "truck_wreck"],
-        dam: ["dam_tower", "crane", "generator", "helipad", "watchtower", "boat"],
+        dam: ["dam_tower", "crane", "generator", "watchtower", "boat"],
       };
       const TALL = new Set(["chimney", "silo", "water_tank", "watchtower", "windmill", "dam_tower", "crane"]);
       const set = (SETS[bth] ?? SETS.farm).filter((n) => BUILD_NAMES.has(n));
       const want = set.length ? (S.story ? GATES.length * 3 + 3 : 8) : 0;
+      // вертолётная площадка — только в конце последней главы, на точке сбора (туда прилетает вертолёт)
+      if (S.story && CH === CHAPTERS.length - 1 && BUILD_NAMES.has("helipad")) {
+        const k = buildK("helipad"), tex = this.textures.get("bd_helipad").getSourceImage();
+        this.add.image(W / 2, EXIT_Y, "bd_helipad").setDisplaySize(tex.width / k, tex.height / k).setDepth(-9);
+      }
       for (let n = 0, tries = 0; n < want && tries < 900; tries++) {
         const name = rnd.pick(set), k = buildK(name), tex = this.textures.get("bd_" + name).getSourceImage();
         const w = tex.width / k, h = tex.height / k, tall = TALL.has(name), flat = name === "helipad";
@@ -1308,11 +1337,11 @@ class Game extends Phaser.Scene {
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
-          this.artSh.push([im, 0.6]);
+          this.artSh.push([im, 0.6, 0.05]);
           this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p, noSh: true });
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
-          this.artSh.push([im, 0.4]);
+          this.artSh.push([im, 0.4, 0.12]);
           const ex = w * 0.36, ey = h * 0.24;
           p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
           this.walls.push(p.wall);
@@ -2031,6 +2060,13 @@ class Game extends Phaser.Scene {
     S.clip[w.id] += take; S.stock[w.id] = (S.stock[w.id] ?? 0) - take;
   }
   /** спецпатроны: обычные → бронебойные → зажигательные (только те, что есть) */
+  setAmmo(k: number) {
+    if (S.over || S.chatOpen || this.dead || S.ammoK === k) return;
+    if ((k === 1 && S.ap <= 0) || (k === 2 && S.inc <= 0)) return;
+    S.ammoK = k;
+    S.msg = t((["ammo_n", "ammo_ap", "ammo_inc"] as Key[])[k]); S.msgT = 1;
+    sfx("swap");
+  }
   cycleAmmo() {
     if (S.over || S.chatOpen || this.dead) return;
     for (let k = 1; k <= 3; k++) {
@@ -2595,11 +2631,11 @@ class Game extends Phaser.Scene {
     const R = 125 * power;
     // соседние бочки рвутся цепочкой (с задержкой), ящики ломаются
     if (NET.role !== "client") for (const p of this.props) {
-      if (p.dead || (p.kind !== "barrel" && p.kind !== "crate")) continue;
+      if (p.dead || (p.kind !== "barrel" && p.kind !== "crate" && !(p.kind === "fence" && p.hp < 1e8))) continue;
       const d = Math.hypot(p.x - x, p.y - y);
       if (d > R * 0.85 || d < 1) continue;
       if (p.kind === "barrel") this.time.delayedCall(110 + d * 1.2, () => this.breakProp(p, true));
-      else this.hitProp(p, 6 * (1 - d / R) + 1);
+      else this.hitProp(p, p.kind === "fence" ? 99 : 6 * (1 - d / R) + 1);
     }
     // урон считает хозяин (у гостя — только вид)
     if (NET.role !== "client") for (const e of this.enemies) {
@@ -2939,6 +2975,8 @@ class Game extends Phaser.Scene {
         sfx("thunk", this.near(b.x, b.y) * 0.8);
         this.blood.setParticleTint(0x7a5432);
         this.blood.explode(4, b.x - b.dx * 3, b.y - b.dy * 3 + gunZ);
+        // забор от пуль ломается (стены домов — нет)
+        if (!b.vis) { const fp = this.props.find((p) => p.wall === w && p.kind === "fence" && !p.dead); if (fp) this.hitProp(fp, pdmg); }
         break;
       }
       // стоячие предметы (бочки, ящики, столбы): попадание по видимой высоте и по всему пути пули за кадр
@@ -3859,7 +3897,7 @@ class UI extends Phaser.Scene {
     return tt.setText(s).setFontSize(size).setColor(color).setOrigin(ox, 0.5).setPosition(x, y).setVisible(true);
   }
   /** верх экрана одной строкой: [сердце | жизнь, под ней броня] [волна] [убито] [очки] [патроны пульками] [гранаты] [аптечки] */
-  drawTop(g: Phaser.GameObjects.Graphics, w: number, h: number) {
+  drawTop(g: Phaser.GameObjects.Graphics, w: number, h: number, hits: Hit[]) {
     const g2 = this.g2, sc = w < 700 || h < 450 ? 0.8 : 0.92, x = 10;
     // всё в одну строку; если не влезает (узкий экран) — патроны и предметы переносятся во вторую
     const right = w - Math.max(S.touch ? 70 : 120, this.mmR * 2 + 24); // справа кнопки паузы/рюкзака и миникарта
@@ -3915,6 +3953,7 @@ class UI extends Phaser.Scene {
       : W_.id === "rifle" ? ["bullet_rifle", 6.2, W_.mag] as const : W_.id === "shotgun" ? ["shell", 12, W_.mag] as const : ["bullet_pistol", 9, W_.mag] as const;
     const ammoW = 10 * sc + n * step * sc + 6 * sc, itemsW = 2 * 62 * sc;
     if (cx + ammoW + (W_.id === "grenade" ? itemsW / 2 : itemsW) > right) { cx = x; y += 34 * sc; }
+    const stripX = cx;
     let ex = cx + 9 * sc;
     if (W_.id === "grenade") for (let i = 0; i < n; i++) this.img("grenade", ex + i * step * sc, y, sc * 0.72, S.grenades ? 1 : 0.2);
     else {
@@ -3924,10 +3963,21 @@ class UI extends Phaser.Scene {
     ex += n * step * sc + 4 * sc;
     pillBg(cx, ex - cx, y);
     cx = ex + 5 * sc;
-    // спецпатроны: какие заряжены и сколько
-    if (BULLET_GUN(W_.id) && (S.ap > 0 || S.inc > 0)) {
-      const tx = S.ammoK === 1 ? `${t("ammo_ap_s")} ${S.ap}` : S.ammoK === 2 ? `${t("ammo_inc_s")} ${S.inc}` : `${t("ammo_n_s")}${S.touch ? "" : " [B]"}`;
-      cx = pill(cx, y, "bullet_rifle", tx, S.ammoK === 1 ? "#9ae8ff" : S.ammoK === 2 ? "#ff9a50" : "#c8bfa8", 0.9);
+    // типы патронов: три кнопки под лентой пуль — обычные, бронебойные, зажигательные (нажать — зарядить; B — по кругу)
+    if (BULLET_GUN(W_.id)) {
+      const by = y + 31 * sc, bh2 = 22 * sc;
+      let bx2 = stripX;
+      const kinds = [[t("ammo_n_s"), -1, "#f2ead8", 0xffe2a0], [t("ammo_ap_s"), S.ap, "#9ae8ff", 0x9ae8ff], [t("ammo_inc_s"), S.inc, "#ff9a50", 0xff9a50]] as const;
+      kinds.forEach(([lb, n, col, line], k) => {
+        const sel = S.ammoK === k, has = n !== 0;
+        const tx = this.txt(n < 0 ? `${lb}` : `${lb} ${n}`, bx2 + 10 * sc, by + 0.5, 12 * sc, has ? (sel ? col : "#c8bfa8") : "#6a6252");
+        const bw2 = tx.width + 20 * sc;
+        g.fillStyle(sel ? 0x2a2416 : 0x14110d, sel ? 0.85 : 0.55).fillRoundedRect(bx2, by - bh2 / 2, bw2, bh2, bh2 / 2)
+          .lineStyle(sel ? 2 : 1.2, sel ? line : 0xffe2a0, sel ? 0.95 : 0.2).strokeRoundedRect(bx2, by - bh2 / 2, bw2, bh2, bh2 / 2);
+        if (has) hits.push({ x: bx2, y: by - bh2 / 2 - 3, w: bw2, h: bh2 + 6, fn: () => this.gm.setAmmo(k) });
+        bx2 += bw2 + 5 * sc;
+      });
+      if (!S.touch) this.txt("[B]", bx2 + 2 * sc, by + 0.5, 11 * sc, "#8a8270");
     }
     if (W_.id !== "grenade") cx = pill(cx, y, "grenade", `${S.grenades}`, S.grenades ? "#f2ead8" : "#8a8270", 0.72);
     pill(cx, y, "medkit", `${S.medkits}`, S.medkits ? "#f2ead8" : "#8a8270", 0.72);
@@ -4105,7 +4155,7 @@ class UI extends Phaser.Scene {
     S.hurtV = Math.max(0, S.hurtV - this.game.loop.delta / 1000 * 2.2);
     const lowA = !S.over && S.hp > 0 && S.hp < 30 ? 0.5 + 0.35 * Math.max(0, Math.sin(performance.now() / 160)) : 0;
     this.vig.setDisplaySize(w, h).setAlpha(Math.min(0.95, Math.max(S.hurtV, lowA))).setVisible(!S.menu);
-    if (!S.over && !S.inv) this.drawTop(g, w, h);
+    if (!S.over && !S.inv) this.drawTop(g, w, h, hits);
     this.help.setPosition(w - 14, h - 12).setWordWrapWidth(w - 28).setText(S.touch || S.inv ? "" : t("help"));
     // ячейки оружия и рюкзак: внизу по центру (на тачскрине — между стиками, а если тесно — над кнопками справа)
     if (!S.over && !S.inv) {
