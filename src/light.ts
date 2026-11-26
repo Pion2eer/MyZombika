@@ -108,6 +108,8 @@ export class Lighting {
   private occl!: Phaser.GameObjects.Graphics;
   private casters: Caster[] = [];
   private trees: TreeCaster[] = [];
+  /** нарисованные постройки и машины: тот же силуэт, сдвинутый от солнца (как тень в рисованных играх) */
+  private drops: { img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image; k: number }[] = [];
   /** радиус света вокруг героя и длина луча фонаря */
   R = 210;
   /** яркость пятна вокруг героя (0..1) */
@@ -230,7 +232,14 @@ export class Lighting {
    * (верх картинки уходит по направлению тени), длина — по высоте солнца.
    */
   /** убрать тень предмета (бочку взорвали, ящик разбили) */
+  addDrop(img: Phaser.GameObjects.Image, k = 1) {
+    const sh = this.scene.add.image(img.x, img.y, img.texture.key).setOrigin(img.originX, img.originY)
+      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipX(img.flipX).setTintFill(0x000000).setDepth(-3.6);
+    this.drops.push({ img, sh, k });
+  }
   removeShadow(img: Phaser.GameObjects.Image) {
+    for (const d of this.drops) if (d.img === img) d.sh.destroy();
+    this.drops = this.drops.filter((d) => d.img !== img);
     for (const t of this.trees) if (t.img === img) t.c.destroy();
     for (const c of this.casters) if (c.img === img) c.c.destroy();
     this.trees = this.trees.filter((t) => t.img !== img);
@@ -279,6 +288,11 @@ export class Lighting {
       if (shA <= 0.01) { t.c.setVisible(false); continue; }
       t.c.setVisible(true).setRotation(m.th1).setScale(m.sx, m.sy).setAlpha(shA);
       t.sh.setRotation(m.th2);
+    }
+    for (const d of this.drops) {
+      if (shA <= 0.01) { d.sh.setVisible(false); continue; }
+      const off = d.img.displayHeight * d.k * 0.16 * Phaser.Math.Clamp(len, 0.5, 2);
+      d.sh.setVisible(true).setAlpha(shA * 0.85).setPosition(d.img.x + Math.cos(ang) * off, d.img.y + Math.sin(ang) * off);
     }
     for (const c of this.casters) {
       if (shA <= 0.01) { c.c.setVisible(false); continue; }

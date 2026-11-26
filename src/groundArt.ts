@@ -204,3 +204,22 @@ export function makeGroundPatches(scene: Phaser.Scene) {
   for (let i = 0; i < 2; i++) add("gp_dry" + i, tintCanvas(r, "#b8a848", "#8a7a30"), blobMask(r, 1), 0.38);
   for (let i = 0; i < 3; i++) add("gp_flow" + i, flowersCanvas(r), null);
 }
+
+/** пятна крови/копоти: неровная клякса с брызгами вокруг (белая — красим tint), splat0..3 */
+export function makeSplats(scene: Phaser.Scene) {
+  if (scene.textures.exists("splat0")) return;
+  const r = rng(777);
+  for (let i = 0; i < 4; i++) {
+    const cv = document.createElement("canvas"); cv.width = cv.height = P;
+    const c = cv.getContext("2d")!;
+    c.fillStyle = "#fff"; c.fillRect(0, 0, P, P);
+    const m = blobMask(r, 1.8);
+    // брызги вокруг кляксы
+    const d = c.getImageData(0, 0, P, P);
+    for (let k = 0; k < P * P; k++) d.data[k * 4 + 3] = Math.round(255 * m[k]);
+    c.putImageData(d, 0, 0);
+    c.fillStyle = "#fff";
+    for (let k = 0; k < 14; k++) { const a = r() * Math.PI * 2, dd = P * (0.3 + r() * 0.17), s = 2 + r() * 6; c.beginPath(); c.arc(P / 2 + Math.cos(a) * dd, P / 2 + Math.sin(a) * dd, s, 0, Math.PI * 2); c.fill(); }
+    scene.textures.addCanvas("splat" + i, cv);
+  }
+}

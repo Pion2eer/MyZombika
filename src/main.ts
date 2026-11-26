@@ -11,7 +11,7 @@ import { settings, openMenu, closeMenu, openOver } from "./menu";
 import { startRun } from "./scores";
 import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
-import { loadGroundFiles, makeGround, makeGroundPatches, HAS_GRASS } from "./groundArt";
+import { loadGroundFiles, makeGround, makeGroundPatches, makeSplats, HAS_GRASS } from "./groundArt";
 import { loadArtFiles, objArt, HOUSE_NAMES, ART_K, OBJ_K, BUILD_NAMES, buildK } from "./artFiles";
 const BUILD_K_SMALL = (n: string) => buildK(n) !== ART_K;
 import { HUD_ART, HUD_FILE, loadHudFiles, makeHudArt, type HudArt } from "./hudArt";
@@ -434,8 +434,8 @@ class Humanoid {
 // ───────── враги ─────────
 export type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter" | "armored" | "brute" | "bloater";
 const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; score: number; sprite?: string; size?: number; mass: number; blood: number }> = {
-  zombie: { hp: 4, speed: 50, r: 11, dmg: 12, score: 10, mass: 1, blood: 0x5a7a2a },
-  runner: { hp: 3, speed: 92, r: 11, dmg: 10, score: 15, mass: 1, blood: 0x5a7a2a },
+  zombie: { hp: 4, speed: 50, r: 11, dmg: 12, score: 10, mass: 1, blood: 0x4a3a1c },
+  runner: { hp: 3, speed: 92, r: 11, dmg: 10, score: 15, mass: 1, blood: 0x4a3a1c },
   rat: { hp: 1, speed: 125, r: 7, dmg: 5, score: 5, sprite: "rodent", size: 34, mass: 0.5, blood: 0x8a1010 },
   hyena: { hp: 3, speed: 150, r: 11, dmg: 8, score: 15, sprite: "scavenger", size: 58, mass: 1, blood: 0x8a1010 },
   panther: { hp: 5, speed: 185, r: 12, dmg: 12, score: 25, sprite: "shadowcat", size: 66, mass: 1.2, blood: 0x6a0c0c },
@@ -443,7 +443,7 @@ const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; s
   /** метатель: медленный, держится поодаль и кидается кусками своего тела */
   spitter: { hp: 8, speed: 34, r: 12, dmg: 10, score: 30, mass: 1.5, blood: 0x7a1010 },
   /** в броне: спереди пули отскакивают (броня понемногу сбивается); сзади, бронебойными, огнём, взрывом и пилой — как обычный */
-  armored: { hp: 7, speed: 46, r: 12, dmg: 14, score: 40, mass: 2.2, blood: 0x5a7a2a },
+  armored: { hp: 7, speed: 46, r: 12, dmg: 14, score: 40, mass: 2.2, blood: 0x4a3a1c },
   /** громила: огромный, много здоровья, бьёт сильно */
   brute: { hp: 30, speed: 44, r: 19, dmg: 26, score: 70, mass: 5, blood: 0x6a1a10 },
   /** раздутый: подходит вплотную и лопается — взрыв ранит всех рядом (и монстров) */
@@ -593,7 +593,7 @@ class Game extends Phaser.Scene {
   /** общая текстура длинных теней людей и зверей (рисуется целиком одной прозрачностью, как у деревьев) */
   actSh!: Phaser.GameObjects.RenderTexture;
   wallShG?: Phaser.GameObjects.Graphics;
-  splats: Phaser.GameObjects.Ellipse[] = [];
+  splats: Phaser.GameObjects.Image[] = [];
   spawnQ: Kind[] = []; spawnT = 0; waveT = 2;
   mouse = { x: 0, y: 0 };
   mates = new Map<string, Mate>();
@@ -649,7 +649,7 @@ class Game extends Phaser.Scene {
     makePropArt(this);
     SV = makeSliceProps(this);
     makeGround(this);
-    makeGroundPatches(this);
+    makeGroundPatches(this); makeSplats(this);
     this.enemies = []; this.obs = []; this.artSh = []; this.bullets = []; this.gibs = []; this.splats = []; this.spawnQ = []; this.waveT = 1.5; this.px = W / 2; this.py = H / 2;
     makeStack(this, "hero_body", PAL_HERO, "body");
     makeStack(this, "hero_head", PAL_HERO, "head");
@@ -714,7 +714,7 @@ class Game extends Phaser.Scene {
     // свет и тени: тени от деревьев и камней
     this.light = new Lighting(this, START_T);
     for (const o of this.obs) if (!o.low) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
-    for (const [im, sq] of this.artSh) this.light.addTree(im, sq);
+    for (const [im, k] of this.artSh) this.light.addDrop(im, k);
     this.player = new Humanoid(this, this.px, this.py, "hero", PAL_HERO, true);
     cam.startFollow(this.player.c, true, 0.15, 0.15);
     this.actSh = this.add.renderTexture(0, 0, 8, 8).setOrigin(0).setDepth(-3.55);
@@ -1243,7 +1243,7 @@ class Game extends Phaser.Scene {
         const y = rnd.between(500, H - 700);
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
-        this.artSh.push([im, 0.55]);
+        this.artSh.push([im, 1]);
         yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
@@ -1282,11 +1282,11 @@ class Game extends Phaser.Scene {
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
-          this.artSh.push([im, 0.8]);
+          this.artSh.push([im, 1.2]);
           this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p });
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
-          this.artSh.push([im, 0.5]);
+          this.artSh.push([im, 0.8]);
           const ex = w * 0.36, ey = h * 0.24;
           p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
           this.walls.push(p.wall);
@@ -1371,13 +1371,18 @@ class Game extends Phaser.Scene {
     for (const y of yards) blob("gp_dirt" + rnd.between(0, 3), y.x + rnd.between(-8, 8), y.y, y.w * 1.3, y.h * 1.5);
     // тропинки: плавная кривая (Безье со смещёнными в стороны опорами), три слоя — тень края, земля, светлая середина
     const g = this.add.graphics().setDepth(-9.85);
-    const trail = (pts: { x: number; y: number }[], wid: number) => {
-      for (const [k, col, a] of [[1.5, 0x4a3a20, 0.16], [1.0, 0x7a5e3a, 0.6], [0.5, 0x9c7e54, 0.45]] as const) {
-        g.lineStyle(wid * k, col, a).strokePoints(pts, false);
+    // все тропы рисуем слоями сразу (сначала края всех, потом середины): на развилках нет тёмных стыков
+    const trails: [{ x: number; y: number }[], number][] = [];
+    const trail = (pts: { x: number; y: number }[], wid: number) => { trails.push([pts, wid]); };
+    const drawTrails = () => {
+      for (const [k, col] of [[1.35, 0x6a5232], [1.0, 0x7d6140], [0.5, 0x8c6f4a]] as const) for (const [pts, wid] of trails) g.lineStyle(wid * k, col, 1).strokePoints(pts, false);
+      // концы и узлы — кружки той же краской, чтобы не было «рубленых» торцов
+      for (const [pts, wid] of trails) for (const q of [pts[0], pts[pts.length - 1]]) { g.fillStyle(0x6a5232, 1).fillCircle(q.x, q.y, wid * 0.67); g.fillStyle(0x7d6140, 1).fillCircle(q.x, q.y, wid * 0.5); }
+      // камешки и травинки по тропе
+      for (const [pts, wid] of trails) for (let i = 0; i < pts.length; i += 2) {
+        if (rnd.frac() < 0.45) g.fillStyle(0x9a9284, 0.9).fillEllipse(pts[i].x + rnd.between(-wid / 3, wid / 3), pts[i].y + rnd.between(-wid / 3, wid / 3), rnd.between(2, 5), rnd.between(2, 4));
+        if (rnd.frac() < 0.5) g.fillStyle(0x5c6a2a, 0.8).fillEllipse(pts[i].x + rnd.between(-wid / 2, wid / 2), pts[i].y + rnd.between(-wid / 2, wid / 2), rnd.between(3, 7), rnd.between(2, 3));
       }
-      // камешки по тропе
-      g.fillStyle(0x9a9284, 0.8);
-      for (let i = 0; i < pts.length; i += 3) if (rnd.frac() < 0.5) g.fillEllipse(pts[i].x + rnd.between(-wid / 3, wid / 3), pts[i].y + rnd.between(-wid / 3, wid / 3), rnd.between(2, 5), rnd.between(2, 4));
     };
     const curve = (ax: number, ay: number, bx: number, by: number) => {
       const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L;
@@ -1408,6 +1413,7 @@ class Game extends Phaser.Scene {
         if (best >= 0 && !done.has(key) && bd < 1400) { done.add(key); trail(curve(d.x, d.y, doors[best].x, doors[best].y), 26); }
       });
     }
+    drawTrails();
     // пятна по всей карте: голая земля, тёмная и сухая трава, цветы кучками (не на пашнях)
     const area = (W * H) / 250000;
     const spots: [string, number, number, number][] = [["gp_dirt", 4, 0.22, 140], ["gp_dark", 2, 0.4, 260], ["gp_dry", 2, 0.35, 240], ["gp_flow", 3, 0.5, 110]];
@@ -1522,7 +1528,7 @@ class Game extends Phaser.Scene {
       const p = add("car", x, y, 999, im);
       const [ex, ey] = art ? [im.displayWidth * 0.42, im.displayHeight * 0.33] : { bus: [94, 24], van: [52, 22], car_teal: [43, 18] }[name] ?? [48, 20];
       p.wall = box(x, y, ex, ey, a, name === "bus" || name === "van" ? 34 : 24);
-      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); this.artSh.push([im, 0.45]); }
+      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); this.artSh.push([im, 0.6]); }
       this.walls.push(p.wall);
       // рядом — бочки и покрышки
       const c = Math.cos(a), s = Math.sin(a);
@@ -1577,7 +1583,8 @@ class Game extends Phaser.Scene {
       ob(p, 14, { low: true });
       p.light = { dx: 0, dy: -4, r: 210, col: 0xff8a30, a: 0.75, flick: 0.25, night: false };
       p.fire = this.flames(x, y - 6, 1);
-      this.yards.push({ x, y: y + 4, w: 130, h: 100, path: false });
+      // вытоптанная земля под костром (и у лагерей тоже — они ставятся позже пятен)
+      this.add.image(x + rnd.between(-6, 6), y + 6, "gp_dirt" + rnd.between(0, 3)).setDisplaySize(rnd.between(150, 180), rnd.between(115, 135)).setRotation(rnd.realInRange(-0.3, 0.3)).setDepth(-9.9).setTint(S.story ? CHAPTERS[CH].tint : 0xffffff);
       for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + 0.5; const lx = x + Math.cos(a) * 44, ly = y + Math.sin(a) * 30; if (free(lx, ly, 10)) { const lp = add("fence", lx, ly, 99, this.add.image(lx, ly, "prop_fence").setDisplaySize(40, 12).setRotation(a + Math.PI / 2).setDepth(-4)); void lp; } }
     };
     for (let n = 0, tries = 0; n < 4 && tries < 300; tries++) {
@@ -1614,7 +1621,7 @@ class Game extends Phaser.Scene {
         if (i > 0 && rnd.frac() < 0.25) continue; // дыра в заборе
         const fx = x + c * i * 80, fy = y + s * i * 80;
         const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(84, 26).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
-        const p = add("fence", fx, fy, 99, im);
+        const p = add("fence", fx, fy, 5, im);
         p.wall = box(fx, fy, 40, 3, a, 14);
         this.walls.push(p.wall);
       }
@@ -1624,7 +1631,7 @@ class Game extends Phaser.Scene {
     for (const f of FIELDS) {
       const seg = (fx: number, fy: number, a: number) => {
         const im = this.add.image(fx, fy, "prop_fence").setDisplaySize(64, 20).setRotation(a).setOrigin(0.5, 0.6).setDepth(fy);
-        const p = add("fence", fx, fy, 99, im);
+        const p = add("fence", fx, fy, 4, im);
         p.wall = box(fx, fy, 30, 3, a, 12); this.walls.push(p.wall);
       };
       const x0 = f.x - 14, x1 = f.x + f.w + 14, y0 = f.y - 16, y1 = f.y + f.h + 12;
@@ -1643,7 +1650,7 @@ class Game extends Phaser.Scene {
         const tex = this.textures.get("bd_tractor").getSourceImage(), k = buildK("tractor"), w = tex.width / k, h = tex.height / k;
         const tx = f.x + f.w * (1 - sx), ty = f.y + f.h * rnd.realInRange(0.4, 0.6);
         const im = this.add.image(tx, ty, "bd_tractor").setDisplaySize(w, h).setFlipX(rnd.frac() < 0.5).setOrigin(0.5, 0.85).setY(ty + h * 0.25).setDepth(ty + h * 0.15);
-        this.artSh.push([im, 0.5]);
+        this.artSh.push([im, 0.8]);
         const p = add("deco", tx, ty, 999, im);
         p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; this.walls.push(p.wall);
       }
@@ -1717,7 +1724,7 @@ class Game extends Phaser.Scene {
   /** урон предмету (считает хозяин / одиночная игра) */
   hitProp(p: Prop, dmg: number) {
     if (p.dead || NET.role === "client") return;
-    if (p.kind !== "barrel" && p.kind !== "crate" && p.kind !== "drum") return;
+    if (p.kind !== "barrel" && p.kind !== "crate" && p.kind !== "drum" && !(p.kind === "fence" && p.hp < 1e8)) return;
     p.hp -= dmg;
     if (p.hp <= 0) this.breakProp(p, true);
   }
@@ -1729,12 +1736,13 @@ class Game extends Phaser.Scene {
     if (NET.role === "host") send({ t: "prop", id: p.id });
     if (p.ob) { this.obs = this.obs.filter((o) => o !== p.ob); this.light.removeShadow(p.img); }
     p.img.destroy();
+    if (p.wall) this.walls = this.walls.filter((w) => w !== p.wall);
     this.buildGrid(); this.flowCell = -1;
     if (!fx) return;
     if (p.kind === "barrel") {
       // взрыв сильнее гранаты, остаётся горящее пятно; соседние бочки рвутся цепочкой (в explode)
       if (NET.role !== "client") this.explode(p.x, p.y - 4, 1.25);
-      const sc = this.add.ellipse(p.x, p.y, 30, 20, 0x0e0a06, 0.7).setDepth(-4.1);
+      const sc = this.blotch(p.x, p.y, 30, 20, 0x0e0a06, 0.7).setDepth(-4.1);
       this.tweens.add({ targets: sc, alpha: 0, delay: 20000, duration: 4000, onComplete: () => sc.destroy() });
       for (let i = 0; i < 5; i++) this.gib("gib_chunk", Phaser.Utils.Array.GetRandom([0xc8281a, 0x8a1a10, 0x3a3a3a]), p.x, p.y, 10, rand(0, TAU), rand(120, 300), rand(200, 380), { scale: rand(0.8, 1.4), life: rand(6, 9) });
       this.burns.push({ x: p.x, y: p.y, t: 6, fire: this.flames(p.x, p.y - 2, 0.8), tick: 0 });
@@ -2096,9 +2104,13 @@ class Game extends Phaser.Scene {
   /** громкость по расстоянию до героя */
   near(x: number, y: number) { return Phaser.Math.Clamp(1.15 - Math.hypot(x - this.px, y - this.py) / 650, 0, 1); }
 
+  /** неровное пятно (кровь, копоть): клякса с брызгами, не ровный овал */
+  blotch(x: number, y: number, w: number, h: number, col: number, a: number) {
+    return this.add.image(x, y, "splat" + Math.floor(Math.random() * 4)).setDisplaySize(w * 1.25, h * 1.25).setTint(col).setAlpha(a).setRotation(rand(-0.5, 0.5)).setFlipX(Math.random() < 0.5);
+  }
   /** кровавое пятно на земле */
   splat(x: number, y: number, col: number, r: number) {
-    const e = this.add.ellipse(x, y, r * rand(1.6, 2.4), r * rand(1.1, 1.6), col, rand(0.45, 0.7)).setDepth(-4).setRotation(rand(0, TAU));
+    const e = this.blotch(x, y, r * rand(1.6, 2.4), r * rand(1.1, 1.6), col, rand(0.5, 0.75)).setDepth(-4);
     this.splats.push(e);
     if (this.splats.length > 260) this.splats.shift()!.destroy();
   }
@@ -2560,7 +2572,7 @@ class Game extends Phaser.Scene {
     this.blood.setParticleTint(0xffb040);
     this.blood.explode(40, x, y - 6);
     for (let i = 0; i < 12; i++) this.gib("gib_chunk", Phaser.Utils.Array.GetRandom([0x5a4a30, 0x4a3a24, 0x6a5a3a, 0x3a3020]), x, y, 3, rand(0, TAU), rand(80, 280), rand(160, 340), { scale: rand(0.5, 1.1) });
-    const scorch = this.add.ellipse(x, y, 74, 50, 0x16120a, 0.6).setDepth(-4.2);
+    const scorch = this.blotch(x, y, 74, 50, 0x16120a, 0.6).setDepth(-4.2);
     this.tweens.add({ targets: scorch, alpha: 0, delay: 12000, duration: 4000, onComplete: () => scorch.destroy() });
   }
 
@@ -2646,7 +2658,7 @@ class Game extends Phaser.Scene {
     this.chunks(e, dir, Math.round((e.hum ? 9 : 7) * Math.sqrt(big)), 1.2);
     for (let i = 0; i < 5; i++) this.splat(e.x + rand(-14, 14) * big, e.y + rand(-10, 10) * big, KINDS[e.kind].blood, rand(3, 7) * big);
     // лужа и останки
-    const pool = this.add.ellipse(e.x, e.y, KINDS[e.kind].r * 3, KINDS[e.kind].r * 2, KINDS[e.kind].blood, 0.55).setDepth(-4);
+    const pool = this.blotch(e.x, e.y, KINDS[e.kind].r * 3, KINDS[e.kind].r * 2, KINDS[e.kind].blood, 0.6).setDepth(-4);
     e.c.setDepth(-3);
     if (e.hum) { e.hum.back.clear(); e.hum.front.clear(); e.hum.flash(false); e.hum.body.setTint(0x6a6a6a); }
     if (e.img) e.img.setTint(0x555555);
@@ -3134,6 +3146,11 @@ class Game extends Phaser.Scene {
         e.sx = e.x; e.sy = e.y; e.st = 0.6;
       }
       const moved = Math.hypot(q.x - e.x, q.y - e.y);
+      // упёрся в забор — ломает его (чтобы не застревать у пашен)
+      if (moved < spd * dt * 0.4 && NET.role !== "client") for (const p of this.props) {
+        if (p.kind !== "fence" || p.dead || !p.wall || p.hp > 1e8 || Math.abs(p.x - e.x) > 60 || Math.abs(p.y - e.y) > 60) continue;
+        if (wDist(p.wall, e.x, e.y) < K_.r + 6) { this.hitProp(p, dt * 1.6 * K_.mass); break; }
+      }
       e.x = q.x; e.y = q.y;
       e.ph += moved * (e.hum ? (e.hum.crawl ? 0.3 : 0.12) : 0.25);
       // ползущий оставляет кровавый след
