@@ -7,7 +7,7 @@ import { sfx, setRain, setSound, toggleMute, unlockAudio } from "./sfx";
 import { t, type Key } from "./i18n";
 // на телефоне подсказки без названий клавиш: «Позвать друга (H)» → «Позвать друга»
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
-import { settings, openMenu, closeMenu, openOver, openDone } from "./menu";
+import { settings, openMenu, closeMenu, openOver, openDone, openPause } from "./menu";
 import { startRun } from "./scores";
 import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, unlockChapter, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
@@ -2315,12 +2315,29 @@ class Game extends Phaser.Scene {
     if (S.inv) { this.toggleInv(); return; }
     if (S.over || S.chatOpen) return;
     S.paused = !S.paused;
+    if (S.paused) this.showPause(); else closeMenu();
     if (NET.role !== "solo") return; // в кооперативе мир не останавливается
     S.paused ? this.tweens.pauseAll() : this.tweens.resumeAll();
     this.blood.pause();
     if (!S.paused) this.blood.resume();
   }
 
+  /** меню паузы — DOM-таблички, как главное меню */
+  showPause() {
+    this.input.keyboard!.resetKeys();
+    openPause({
+      waves: () => {}, host: () => {}, join: () => {},
+      changed: () => this.applySettings(),
+    }, {
+      role: NET.role as "solo" | "host" | "client", code: NET.code,
+      resume: () => { if (S.paused) this.togglePause(); },
+      menu: () => { closeMenu(); this.toMenu(); },
+      invite: () => { this.togglePause(); this.hostGame(); },
+      join: () => { this.togglePause(); this.joinGame(); },
+      copyCode: () => copyInvite("code"),
+      copyLink: () => copyInvite("link"),
+    });
+  }
   /** громкость по расстоянию до героя */
   near(x: number, y: number) { return Phaser.Math.Clamp(1.15 - Math.hypot(x - this.px, y - this.py) / 650, 0, 1); }
 
@@ -4442,20 +4459,7 @@ class UI extends Phaser.Scene {
     this.net.setPosition(w / 2, 14).setDepth(1).setText(NET.role === "host" ? `${t("coop_host", { c: NET.code, n })}   [${t("copy_link_small")}${S.touch ? "" : " — C"}]` : NET.role === "client" ? t("coop_client", { c: NET.code }) : NET.status);
     if (NET.role === "host") g.fillStyle(0x14110d, 0.6).fillRoundedRect(w / 2 - this.net.width / 2 - 10, 8, this.net.width + 20, 30, 8).lineStyle(1.5, 0xbfe0ff, 0.6).strokeRoundedRect(w / 2 - this.net.width / 2 - 10, 8, this.net.width + 20, 30, 8);
     if (S.paused) {
-      g.fillStyle(0x000000, 0.5).fillRect(0, 0, w, h);
-      this.big.setPosition(w / 2, h / 2).setText(`${t("pause")}\n\n${S.touch ? t("pause_touch") : t("pause_key")}`).setFontSize(Math.min(34, w / 22)).setAlpha(1);
-      // кнопки кооператива
-      if (NET.role !== "client") {
-        const labels = NET.role === "host" ? [t("copy_code", { c: NET.code }), t("copy_link")] : [tk("invite"), tk("join_code")];
-        for (const [i, label] of labels.entries()) {
-          const bx = w / 2 + (i ? 120 : -120), by = h * 0.68;
-          g.fillStyle(0x14110d, 0.85).fillRoundedRect(bx - 105, by, 210, 50, 10).lineStyle(2, 0xffe2a0, 0.7).strokeRoundedRect(bx - 105, by, 210, 50, 10);
-          this.btn[i].setPosition(bx, by + 25).setText(label).setVisible(true);
-        }
-      }
-      const my = h * 0.68 + 64;
-      g.fillStyle(0x14110d, 0.85).fillRoundedRect(w / 2 - 105, my, 210, 50, 10).lineStyle(2, 0xffe2a0, 0.7).strokeRoundedRect(w / 2 - 105, my, 210, 50, 10);
-      this.btn[2].setPosition(w / 2, my + 25).setText(t("main_menu")).setVisible(true);
+      this.big.setAlpha(0); // меню паузы — табличками поверх игры (menu.ts)
     } else if (S.inv && !S.over) {
       this.big.setAlpha(0);
       this.drawInv(g, w, h, hits);

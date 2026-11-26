@@ -34,7 +34,9 @@ setLang(settings.lang);
 export interface MenuActions { waves(): void; story?(fresh: boolean, ch?: number): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
 
 let root: HTMLDivElement | null = null;
-let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" | "done" = "main";
+let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" | "done" | "pause" = "main";
+/** куда ведёт «Назад» из настроек и «как играть» (из главного меню или из паузы) */
+let ret: "main" | "pause" = "main";
 let acts: MenuActions | null = null;
 let joinCode = "";
 
@@ -130,6 +132,9 @@ const CSS = `
 @media (max-height:520px){.mz .over .skull{display:none}.mz .over h1{font-size:34px}.mz .stats{margin:8px 0 6px}.mz .stat b{font-size:20px}.mz .stat i{display:none}.mz .tbl{max-height:46vh}
  .mz .logo{width:min(360px,70%)}.mz .sub{margin-bottom:8px;font-size:15px}.mz .btn{margin-bottom:8px}.mz .btn small{display:none}.mz .btn.big .pl{min-height:58px}.mz .btn.big .ic{width:42px;height:42px;padding:8px}
  .mz .box.wide{width:min(760px,100%)}}
+.mz.paused{background:radial-gradient(ellipse at center,rgba(4,8,4,.45) 0%,rgba(4,8,4,.8) 100%)}
+.mz .card.pz{padding-bottom:6px}.mz .card.pz .hint{text-align:center;margin:-6px 0 12px}.mz .card.pz .btn.main{font-size:22px}.mz .card.pz .btn.main .pl{justify-content:center;min-height:58px}
+.mz .card.pz .row2 .btn{font-size:15px}.mz .card.pz>.btn:last-child .pl{justify-content:center}
 .mz .over.win h1{color:#c8f070;text-shadow:0 3px 0 #1a3a0a,0 6px 18px rgba(0,0,0,.8);font-size:clamp(44px,9vw,68px)}
 .mz .over.win .sub{margin:0 0 6px;font-size:15px}.mz .over.win .sub:before,.mz .over.win .sub:after{flex-basis:60px}
 .mz .over.win .stats{grid-template-columns:repeat(4,1fr)}
@@ -195,6 +200,7 @@ function render() {
     b.onclick = fn; return b;
   };
   if (page === "main") {
+    ret = "main";
     box.append(el("img", { class: "logo", src: LOGO, alt: "MyZombika", draggable: "false" }), el("div", { class: "sub" }, esc(t("subtitle"))));
     if (joinCode) box.appendChild(btn(`${esc(t("m_join_friend", { c: joinCode }))}`, () => a.join(joinCode), "main big", "join"));
     box.appendChild(btn(`${esc(t("m_waves"))}<small>${esc(t("m_waves_d"))}</small>`, () => a.waves(), joinCode ? "big" : "main big", "waves"));
@@ -276,7 +282,7 @@ function render() {
     field(t("s_shake"), chk(settings.shake, (v) => (settings.shake = v)));
     field(t("s_aim"), chk(settings.aim, (v) => (settings.aim = v)));
     if (mobile) field(t("s_fs"), chk(settings.fs, (v) => (settings.fs = v)));
-    const back = btn(esc(t("m_back")), () => { page = "main"; render(); }, "", "back");
+    const back = btn(esc(t("m_back")), () => { page = ret; render(); }, "", "back");
     back.style.marginTop = "12px";
     c.appendChild(back);
     box.appendChild(c);
@@ -292,6 +298,23 @@ function render() {
         `<tr class="${r.name.toLowerCase() === me ? "me" : ""}${i < 3 ? " g1" : ""}"><td>${i + 1}</td><td>${esc(r.name)}${r.co > 1 ? " 👥" : ""}</td><td>${r.score}</td><td>${r.wave}</td><td>${r.kills}</td><td>${fmtTime(r.time)}</td></tr>`).join("")}</table>`;
     }).catch(() => { tb.innerHTML = `<p>${esc(t("lb_off"))}</p>`; });
     c.appendChild(btn(esc(t("m_back")), () => { page = back; render(); }, "", "back"));
+    box.appendChild(c);
+  } else if (page === "pause" && pz) {
+    // пауза: те же таблички — продолжить, позвать друга, настройки, как играть, в главное меню
+    const z = pz, c = el("div", { class: "card pz" });
+    c.appendChild(el("h2", {}, esc(t("pause"))));
+    if (!mobile) c.appendChild(el("p", { class: "note hint" }, esc(t("p_hint"))));
+    c.appendChild(btn(esc(t("p_resume")), () => z.resume(), "main", "again"));
+    if (z.role !== "client") {
+      const row = el("div", { class: "row2" });
+      if (z.role === "host") row.append(btn(esc(t("copy_code", { c: z.code })), () => z.copyCode(), "", "join"), btn(esc(t("copy_link")), () => z.copyLink(), "", "coop"));
+      else row.append(btn(esc(t("invite").replace(/\s*\(.\)$/, "")), () => z.invite(), "", "coop"), btn(esc(t("join_code").replace(/\s*\(.\)$/, "")), () => z.join(), "", "join"));
+      c.appendChild(row);
+    }
+    const row2 = el("div", { class: "row2" });
+    row2.append(btn(esc(t("m_settings")), () => { ret = "pause"; page = "settings"; render(); }, "", "settings"), btn(esc(t("m_howto")), () => { ret = "pause"; page = "howto"; render(); }, "", "howto"));
+    c.appendChild(row2);
+    c.appendChild(btn(esc(t("main_menu")), () => z.menu(), "", "home"));
     box.appendChild(c);
   } else if (page === "done" && done) {
     // глава пройдена: «Выжили!», мелко — какая глава, итоги, кнопка дальше
@@ -345,7 +368,7 @@ function render() {
     const c = el("div", { class: "card" });
     c.appendChild(el("h2", {}, esc(t("m_howto"))));
     for (const k of (mobile ? ["howto_touch", "howto_items"] : ["howto_pc", "howto_touch", "howto_items"]) as ("howto_pc" | "howto_touch" | "howto_items")[]) c.appendChild(el("p", {}, esc(t(k))));
-    c.appendChild(btn(esc(t("m_back")), () => { page = "main"; render(); }, "", "back"));
+    c.appendChild(btn(esc(t("m_back")), () => { page = ret; render(); }, "", "back"));
     box.appendChild(c);
   }
   box.appendChild(el("div", { class: "ver" }, `v${__VERSION__} · ${__BUILT__} · myzombika.pion.ltd`));
@@ -389,6 +412,14 @@ export function openOver(actions: MenuActions, r: Result, client: boolean) {
   ensureRoot(); root!.classList.add("dead");
   render();
 }
+// ───────── пауза ─────────
+export interface PauseInfo { role: "solo" | "host" | "client"; code: string; resume(): void; menu(): void; invite(): void; join(): void; copyCode(): void; copyLink(): void }
+let pz: PauseInfo | null = null;
+export function openPause(actions: MenuActions, info: PauseInfo) {
+  acts = actions; pz = info; page = "pause"; ret = "pause";
+  ensureRoot(); root!.classList.remove("dead"); root!.classList.add("paused");
+  render();
+}
 // ───────── глава пройдена ─────────
 export interface DoneInfo { title: string; sub: string; stats: { kills: number; dmg: number; shots: number; hits: number; time: number; xp: number; parts: number; deaths: number }; last: boolean; client: boolean; go(): void }
 let done: DoneInfo | null = null;
@@ -398,4 +429,4 @@ export function openDone(d: DoneInfo) {
   ensureRoot(); root!.classList.remove("dead");
   render();
 }
-export function closeMenu() { if (root) root.style.display = "none"; }
+export function closeMenu() { if (root) { root.style.display = "none"; root.classList.remove("paused"); } }
