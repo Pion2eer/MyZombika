@@ -7,7 +7,7 @@ import { sfx, setRain, setSound, toggleMute, unlockAudio } from "./sfx";
 import { t, type Key } from "./i18n";
 // на телефоне подсказки без названий клавиш: «Позвать друга (H)» → «Позвать друга»
 const tk = (k: Key, p?: Record<string, string | number>) => (S.touch ? t(k, p).replace(/\s*\([A-Z]\)/g, "") : t(k, p));
-import { settings, openMenu, closeMenu, openOver } from "./menu";
+import { settings, openMenu, closeMenu, openOver, openDone } from "./menu";
 import { startRun } from "./scores";
 import { STORY_W, STORY_H, GATES, CAMPS, START, EXIT_Y, GROUPS, WEAPON_CRATES, CH, CHAPTERS, SEGS, LANE, TUNNEL_Y, setChapter, loadStory, saveStory, unlockChapter, loadHero, saveHero, type StorySave } from "./story";
 import { makeSliceProps, SLICE_INFO } from "./propVox";
@@ -47,6 +47,10 @@ function storyFree(x: number, y: number, r: number) {
 let MODE: "waves" | "story" = "waves";
 /** сюжет: какая глава идёт (0..4) — у хозяина из сохранения, у гостя из «hi» хозяина */
 let storyCh = 0;
+/** итоги текущей главы (для окна «Выжили!»); живут между перезапусками сцены после гибели */
+export interface ChStats { ch: number; kills: number; dmg: number; shots: number; hits: number; time: number; xp: number; parts: number; deaths: number }
+const freshCS = (ch: number): ChStats => ({ ch, kills: 0, dmg: 0, shots: 0, hits: 0, time: 0, xp: 0, parts: 0, deaths: 0 });
+let CS = freshCS(-1);
 const VOX = 1.0, K = 3, DZ = 0.8, FRAMES = 64; // воксель = 1 px мира; атлас 64 поворота
 const lift = (z: number) => -z * DZ * VOX;
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -138,7 +142,7 @@ export const S = (window as any).S = {
   /** оружие: выбранная ячейка (0..3), патроны в магазинах, какое оружие есть (в «волнах» — всё) */
   weapon: 0, clip: baseClips(), owned: ALL_OWNED(),
   /** спецпатроны: выбранные (0 — обычные, 1 — бронебойные, 2 — зажигательные) и сколько есть; запас ракет и топлива */
-  ammoK: 0, ap: 0, inc: 0, stock: { bazooka: 2, flamer: 50 } as Partial<Record<WeaponId, number>>,
+  ammoK: 0, ap: 0, inc: 0, ex: 0, stock: { bazooka: 2, flamer: 50 } as Partial<Record<WeaponId, number>>,
   /** прокачка: уровень, опыт, детали, ступени улучшения оружия; верстак рядом (в «волнах» — всегда) */
   /** имя героя сюжета — как назвался хозяин игры */
   hero: "",
@@ -150,6 +154,8 @@ export const S = (window as any).S = {
   lift: 0,
   /** сюжет: идёт сюжетная глава; bannerText — надпись заставки вместо «Волна N», bannerN — показать заставку ещё раз */
   story: false, bannerText: "", bannerN: 0,
+  /** оборона: сколько ещё держаться, с (0 — нет); holdMax — всего */
+  hold: 0, holdMax: 0,
   msg: "", msgT: 0, daytime: "", net: "", chatOpen: false, chat: [] as { who: string; text: string; t: number; me: boolean }[], myName: "Player 1", paused: false, touch: false, move: null as Stick | null, aim: null as Stick | null,
 };
 
@@ -193,6 +199,9 @@ const PAL_ZOMBIE_C: Palette = {
 };
 /** в броне: стальной шлем (волосы) и латы на груди (жилет — вторая стопка, слетает, когда броню сбили) */
 const PAL_ZOMBIE_D: Palette = { ...PAL_ZOMBIE_A, HAIR: [0x8a9098, 0x767c84, 0x9aa0a8, 0x62686e], BEARD: [0x3c4430, 0x2e3426, 0x48523a] };
+/** «Хозяин»: серо-лиловая гниющая кожа, чёрное тряпьё, на груди — ржавые латы (слетают, когда его почти добили) */
+const PAL_BOSS: Palette = { ...PAL_ZOMBIE_A, SKIN: 0x8a7a8e, SKIN_SH: 0x5e4e62, FUR: [0x2a2226, 0x221c20, 0x3a2c30], FUR_DARK: [0x5a1a14, 0x4a1410, 0x6a2418], HAIR: [0x1a1416, 0x241c1e, 0x2e2426, 0x120e10], BEARD: [0x6a2a20, 0x5a2018, 0x7a3426], LACE: 0x8a1a14, EYE: 0xffe040, EYE_WHITE: 0xff5010 };
+const PAL_BOSS_PL: Palette = { ...PAL_BOSS, FUR: [0x7a5a44, 0x6a4a36, 0x5a3c2a], LACE: 0x2a1c14, BRASS: 0xb08a5a };
 const PAL_PLATE: Palette = { ...PAL_ZOMBIE_D, FUR: [0x9aa2ac, 0x828a94, 0x6a727c], LACE: 0x2a2c30, BRASS: 0xc0c8d0 };
 /** громила: тёмно-багровая кожа, рваная спецовка */
 const PAL_ZOMBIE_E: Palette = { ...PAL_ZOMBIE_A, SKIN: 0x9a6a5a, SKIN_SH: 0x7a4a3e, FUR: [0x3a4a5a, 0x2e3e4e, 0x26323e], FUR_DARK: [0x2a2420, 0x221e1a, 0x34302a], HAIR: [0x1a1612, 0x221c16, 0x2a2218, 0x14100c], EYE: 0xffd020 };
@@ -461,7 +470,7 @@ class Humanoid {
 }
 
 // ───────── враги ─────────
-export type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter" | "armored" | "brute" | "bloater";
+export type Kind = "zombie" | "runner" | "rat" | "hyena" | "panther" | "bear" | "spitter" | "armored" | "brute" | "bloater" | "boss";
 const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; score: number; sprite?: string; size?: number; mass: number; blood: number }> = {
   zombie: { hp: 4, speed: 50, r: 11, dmg: 12, score: 10, mass: 1, blood: 0x4a3a1c },
   runner: { hp: 3, speed: 92, r: 11, dmg: 10, score: 15, mass: 1, blood: 0x4a3a1c },
@@ -477,14 +486,17 @@ const KINDS: Record<Kind, { hp: number; speed: number; r: number; dmg: number; s
   brute: { hp: 30, speed: 44, r: 19, dmg: 26, score: 70, mass: 5, blood: 0x6a1a10 },
   /** раздутый: подходит вплотную и лопается — взрыв ранит всех рядом (и монстров) */
   bloater: { hp: 6, speed: 42, r: 15, dmg: 10, score: 30, mass: 2, blood: 0x7a9a2a },
+  /** «Хозяин» — финальный босс: огромный зомби из срезов, плюётся залпами, за ним горит земля, теряет руки и латы */
+  boss: { hp: 520, speed: 40, r: 30, dmg: 34, score: 1500, mass: 9, blood: 0x5a0c0c },
 };
 /** сколько ударов по броне выдерживает броня «в броне» */
 const ARMOR_PTS = 14;
 /** масштаб фигуры (громила и раздутый — крупнее) */
-const KIND_SCALE: Partial<Record<Kind, number>> = { brute: 1.6, bloater: 1.3 };
+const KIND_SCALE: Partial<Record<Kind, number>> = { brute: 1.6, bloater: 1.3, boss: 2.6 };
 interface Enemy {
   kind: Kind; x: number; y: number; kx: number; ky: number; hp: number; a: number; ph: number; cool: number; hitT: number;
   /** сюжет: с какого участка (-1 — бродячий); финальный босс */ seg?: number; boss?: boolean;
+  /** босс: латы на нём, стадия разрушения, таймеры огня и залпов, полное здоровье */ plates?: boolean; stage?: number; trailT?: number; shotT?: number; burst?: number; burstT?: number; mh?: number; bossPart?: boolean;
   hum?: Humanoid; img?: Phaser.GameObjects.Image; c: Phaser.GameObjects.Container; dead: boolean;
   /** через сколько секунд подать голос */
   voice: number;
@@ -501,31 +513,31 @@ interface Enemy {
   /** проверка «застрял»: где был и сколько ждать до проверки */
   sx: number; sy: number; st: number; side: number; sideT: number;
   /** броня (у «в броне»), горит ещё столько секунд, когда следующий ожог */
-  arm?: number; burn?: number; burnT?: number;
+  arm?: number; burn?: number; burnT?: number; fireFx?: Phaser.GameObjects.Particles.ParticleEmitter;
 }
 /** детали с врага: [шанс, от, до] */
-const PARTS: Record<Kind, [number, number, number]> = { zombie: [0.05, 1, 1], runner: [0.07, 1, 1], rat: [0.02, 1, 1], hyena: [0.08, 1, 1], panther: [0.3, 1, 2], bear: [1, 4, 6], spitter: [0.35, 1, 2], armored: [0.5, 1, 3], brute: [0.8, 2, 4], bloater: [0.2, 1, 2] };
+const PARTS: Record<Kind, [number, number, number]> = { zombie: [0.05, 1, 1], runner: [0.07, 1, 1], rat: [0.02, 1, 1], hyena: [0.08, 1, 1], panther: [0.3, 1, 2], bear: [1, 4, 6], spitter: [0.35, 1, 2], armored: [0.5, 1, 3], brute: [0.8, 2, 4], bloater: [0.2, 1, 2], boss: [1, 12, 16] };
 /** шанс выпадения: [граната, аптечка, бронежилет] */
-const DROP: Record<Kind, [number, number, number]> = { zombie: [0.03, 0.03, 0.01], runner: [0.04, 0.035, 0.015], rat: [0.01, 0.02, 0], hyena: [0.05, 0.04, 0.02], panther: [0.08, 0.06, 0.05], bear: [0.6, 0.6, 0.4], spitter: [0.06, 0.05, 0.03], armored: [0.08, 0.06, 0.12], brute: [0.4, 0.5, 0.3], bloater: [0.06, 0.04, 0] };
+const DROP: Record<Kind, [number, number, number]> = { zombie: [0.03, 0.03, 0.01], runner: [0.04, 0.035, 0.015], rat: [0.01, 0.02, 0], hyena: [0.05, 0.04, 0.02], panther: [0.08, 0.06, 0.05], bear: [0.6, 0.6, 0.4], spitter: [0.06, 0.05, 0.03], armored: [0.08, 0.06, 0.12], brute: [0.4, 0.5, 0.3], bloater: [0.06, 0.04, 0], boss: [1, 1, 1] };
 /** шанс, что с монстра выпадут патроны (бронебойные / зажигательные / ракеты / топливо — что пригодится) */
-const AMMO_DROP: Record<Kind, number> = { zombie: 0.04, runner: 0.05, rat: 0.01, hyena: 0.05, panther: 0.1, bear: 0.8, spitter: 0.1, armored: 0.25, brute: 0.6, bloater: 0.1 };
-type ItemKind = "grenade" | "medkit" | "armor" | "ap" | "inc" | "rocket" | "fuel";
-const ITEM_KINDS: ItemKind[] = ["grenade", "medkit", "armor", "ap", "inc", "rocket", "fuel"];
+const AMMO_DROP: Record<Kind, number> = { zombie: 0.04, runner: 0.05, rat: 0.01, hyena: 0.05, panther: 0.1, bear: 0.8, spitter: 0.1, armored: 0.25, brute: 0.6, bloater: 0.1, boss: 1 };
+type ItemKind = "grenade" | "medkit" | "armor" | "ap" | "inc" | "ex" | "rocket" | "fuel";
+const ITEM_KINDS: ItemKind[] = ["grenade", "medkit", "armor", "ap", "inc", "rocket", "fuel", "ex"];
 /** сколько даёт находка патронов */
-const AMMO_GIVE: Partial<Record<ItemKind, number>> = { ap: 24, inc: 24, rocket: 2, fuel: 60 };
+const AMMO_GIVE: Partial<Record<ItemKind, number>> = { ap: 24, inc: 24, ex: 16, rocket: 2, fuel: 60 };
 /** свечение находки ночью и точка на мини-карте */
-const ITEM_COL: Record<ItemKind, number> = { grenade: 0x9aff60, medkit: 0xff5050, armor: 0x80b0ff, ap: 0x80e8ff, inc: 0xff8a30, rocket: 0xffd040, fuel: 0xff5030 };
+const ITEM_COL: Record<ItemKind, number> = { grenade: 0x9aff60, medkit: 0xff5050, armor: 0x80b0ff, ap: 0x80e8ff, inc: 0xff8a30, ex: 0xffd040, rocket: 0xffd040, fuel: 0xff5030 };
 interface Item { id: number; kind: ItemKind; x: number; y: number; z: number; vz: number; t: number; life: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 interface Nade { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number; spin: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image }
 /** высота для длины тени, px */
-const HEIGHT: Record<Kind, number> = { zombie: 30, runner: 30, rat: 6, hyena: 14, panther: 16, bear: 36, spitter: 30, armored: 30, brute: 48, bloater: 38 };
+const HEIGHT: Record<Kind, number> = { zombie: 30, runner: 30, rat: 6, hyena: 14, panther: 16, bear: 36, spitter: 30, armored: 30, brute: 48, bloater: 38, boss: 90 };
 /** отлетевший кусок: летит по дуге (z — высота), подпрыгивает, остаётся лежать и тает */
 interface Gib {
   o: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Ellipse; x: number; y: number; z: number; vx: number; vy: number; vz: number; vr: number;
   life: number; rest: boolean; blood: number | null; casing: boolean; trail: number;
 }
 const MEAT = [0x6a1a14, 0x8a2a20, 0x4a0e0a, 0xa0443a];
-const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan", armored: "groan", brute: "roar", bloater: "groan" };
+const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan", armored: "groan", brute: "roar", bloater: "groan", boss: "roar" };
 interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number; /** предмет (бочка, ящик…) */ prop?: Prop; /** стоит «вертикально» (тень как у дерева) */ upright?: boolean; /** низкий — пули летят над ним */ low?: boolean; /** тень рисуется отдельно (нарисованные постройки) */ noSh?: boolean }
 type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires" | "deco";
 /** предмет на карте. Разрушаемые: бочка (взрывается), ящик (ломается, иногда с находкой) */
@@ -538,12 +550,12 @@ interface Burn { x: number; y: number; t: number; fire: Phaser.GameObjects.Parti
 /** где у дерева на картинке основание ствола (доля высоты): картинка ставится основанием в точку ствола */
 const TREE_BASE: Record<string, number> = { tree_1: 0.87, tree_2: 0.845, tree_3: 0.8, tree_5: 0.84, tree_6: 0.825, pine_1: 0.91, pine_2: 0.88, dead_tree_1: 0.93, dead_tree_2: 0.91 };
 /** вид снаряда: ракета, огонь, бронебойная, зажигательная (без — обычная пуля) */
-type Shell = "rocket" | "flame" | "ap" | "fire";
+type Shell = "rocket" | "flame" | "ap" | "fire" | "ex";
 interface Bullet { x: number; y: number; dx: number; dy: number; life: number; d: number; bounces: number; dmg: number; kb: number; /** пробивает ещё стольких врагов */ pierce?: number; last?: Enemy; /** длина трассера */ tr: number; /** только для вида (у гостя): не ранит */ vis?: boolean;
-  kind?: Shell; /** скорость, px/с */ v?: number }
+  kind?: Shell; /** скорость, px/с */ v?: number; /** моя пуля (для итогов главы) */ own?: boolean }
 /** пули одного выстрела (дробь — веером); ak — спецпатроны (1 бронебойные, 2 зажигательные) */
 function shotBullets(w: WeaponDef, x: number, y: number, as: number[], vis: boolean, ak = 0): Bullet[] {
-  const kind: Shell | undefined = w.shell ?? (ak === 1 ? "ap" : ak === 2 ? "fire" : undefined);
+  const kind: Shell | undefined = w.shell ?? (ak === 1 ? "ap" : ak === 2 ? "fire" : ak === 3 ? "ex" : undefined);
   return as.map((a) => ({ x, y, dx: Math.cos(a), dy: Math.sin(a), life: w.life * (w.pellets > 1 || w.shell === "flame" ? rand(0.85, 1.15) : 1), d: 0, bounces: 0, dmg: w.dmg, kb: w.kb, pierce: w.shell === "flame" ? 99 : (w as WStat).pierce ?? 0, tr: w.pellets > 1 ? 9 : 16, vis, kind, v: w.speed }));
 }
 /** другой игрок (у хозяина — гости, у гостя — хозяин и остальные) */
@@ -553,7 +565,7 @@ interface Mate { id: string; name: string; label: Phaser.GameObjects.Text; hum: 
 /** мозги бота-напарника (у хозяина или в одиночной игре) */
 interface Bot { idx: number; think: number; tgt?: Enemy; fireT: number; rel: number; clip: number; stuckT: number }
 const BOT_GUN: WeaponDef = { ...WEAPONS.rifle, dmg: 0.8 };
-const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear", "spitter", "armored", "brute", "bloater"];
+const KIND_LIST: Kind[] = ["zombie", "runner", "rat", "hyena", "panther", "bear", "spitter", "armored", "brute", "bloater", "boss"];
 /** летящий кусок плоти (от метателя): дуга, за ним капает кровь */
 interface Spit { x: number; y: number; z: number; vx: number; vy: number; vz: number; drip: number; img: Phaser.GameObjects.Image; sh: Phaser.GameObjects.Image; vis: boolean }
 const JOIN = new URLSearchParams(location.search).get("join");
@@ -652,7 +664,7 @@ class Game extends Phaser.Scene {
       tunnel: ["jersey", "jersey", "cone", "cone", "barrier", "rubble", "trash_bin", "gas_cyl", "sign_post", "tire_stack"],
     }[th];
   }
-  seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false;
+  seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false; holdT = -1; holdSp = 0; holdNet = 0; holdG?: Phaser.GameObjects.Graphics;
   burns: Burn[] = [];
   lookX = 0; lookY = 0; beatT = 0; ambT = 4;
   constructor() { super("game"); }
@@ -671,7 +683,7 @@ class Game extends Phaser.Scene {
     this.gn = Math.ceil(Math.max(W, H) / Game.CELL);
     this.blocked = new Uint8Array(this.gn * this.gn); this.dist = new Float32Array(this.gn * this.gn);
     Object.assign(S, { level: 1, xp: 0, parts: 0, up: { rifle: 0, shotgun: 0, pistol: 0, grenade: 0 }, maxHp: 100, bench: MODE !== "story", invTab: 0 });
-    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, hurtV: 0, over: false, msg: "", msgT: 0, move: null, aim: null, story: MODE === "story", bannerText: "", owned: ALL_OWNED(), ammoK: 0, ap: 0, inc: 0, stock: { bazooka: 2, flamer: 50 } });
+    Object.assign(S, { paused: false, inv: false, hp: 100, armor: 0, medkits: 0, weapon: 0, clip: fullClips(), grenades: 1, reload: 0, wave: START_WAVE - 1, kills: 0, score: 0, time: 0, hurtV: 0, over: false, msg: "", msgT: 0, move: null, aim: null, story: MODE === "story", bannerText: "", owned: ALL_OWNED(), ammoK: 0, ap: 0, inc: 0, ex: 0, stock: { bazooka: 2, flamer: 50 } });
     this.lastSnap = 0; this.waitHost = false; this.wallShG = undefined;
     this.mates = new Map(); this.dead = false; this.netNades = []; this.items = []; this.nades = []; this.spits = []; this.booms = []; this.flowCell = -1;
     this.props = []; this.burns = [];
@@ -699,8 +711,12 @@ class Game extends Phaser.Scene {
     makeStack(this, "zE_head", PAL_ZOMBIE_E, "head");
     makeStack(this, "zF_body", PAL_ZOMBIE_F, "body");
     makeStack(this, "zF_head", PAL_ZOMBIE_F, "head");
+    makeStack(this, "zBoss_body", PAL_BOSS, "body");
+    makeStack(this, "zBoss_head", PAL_BOSS, "head");
+    makeStack(this, "zBossA_body", PAL_BOSS_PL, "body");
     makeItem(this, "it_ap", ammoVox(0x3a5a6a, 0x80e8ff), 18, 0.7);
     makeItem(this, "it_inc", ammoVox(0x5a3a22, 0xff7a20), 18, 0.7);
+    makeItem(this, "it_ex", ammoVox(0x6a1a14, 0xffd040), 18, 0.7);
     makeItem(this, "it_rocket", ammoVox(0x4a5a2a, 0xffd040), 18, 0.7);
     makeItem(this, "it_fuel", ammoVox(0xb02a1a, 0xe8d8a0, true), 16, 0.7);
     makeStack(this, "heroA_body", withVest(PAL_HERO), "body");
@@ -946,10 +962,11 @@ class Game extends Phaser.Scene {
       const owned = STORY_OWNED().map((v, k) => v || !!old?.owned?.[k] || CHAPTERS.slice(0, pick).some((c) => c.weapons?.some((w) => w.slot === k)));
       const has = (id: WeaponId) => owned[SLOTS.indexOf(id)];
       saveStory({ ch: pick + 1, camp: 0, hp: 999, armor: 0, medkits: 1, grenades: 2, owned, clip: {}, weapon: has("rifle") ? 0 : has("shotgun") ? 1 : 2, kills: 0, score: 0, time: 0,
-        ap: 0, inc: 0, stock: { bazooka: has("bazooka") ? 4 : 0, flamer: has("flamer") ? 120 : 0 }, level: old?.level, xp: old?.xp, parts: old?.parts, up: old?.up });
+        ap: 0, inc: 0, ex: 0, stock: { bazooka: has("bazooka") ? 4 : 0, flamer: has("flamer") ? 120 : 0 }, level: old?.level, xp: old?.xp, parts: old?.parts, up: old?.up });
       fresh = false;
     }
     if (fresh) saveStory(null);
+    CS = freshCS(-1);
     storyCh = fresh ? 0 : Math.max(0, (loadStory()?.ch ?? 1) - 1);
     MODE = "story";
     menuOnStart = false;
@@ -963,9 +980,10 @@ class Game extends Phaser.Scene {
   /** начало главы (или продолжение): герой у дома или в последнем лагере, всё из сохранения */
   storyStart() {
     if (!S.hero) S.hero = S.myName;
+    if (CS.ch !== CH) CS = NET.role !== "client" && loadStory()?.cs?.ch === CH ? { ...freshCS(CH), ...loadStory()!.cs } : freshCS(CH);
     if (NET.role === "client") {
       // гость: мир и участок — от хозяина (в «hi»), своя прокачка — из своего сохранения
-      this.seg = 0; this.storyEnd = false; this.strT = 1e9; this.gateMsgT = 0;
+      this.seg = 0; this.storyEnd = false; this.strT = 1e9; this.gateMsgT = 0; this.holdT = -1; S.hold = 0;
       this.woke = GROUPS.map(() => true); this.campDone = CAMPS.map(() => false);
       S.owned = STORY_OWNED(); S.weapon = 2; S.grenades = 1; S.stock = { bazooka: 0, flamer: 0 };
       const hv = loadHero();
@@ -975,14 +993,14 @@ class Game extends Phaser.Scene {
     }
     const sv0 = loadStory(), sv = sv0 && sv0.ch - 1 === CH ? sv0 : null;
     const camp = sv ? Math.min(sv.camp, CAMPS.length) : 0;
-    this.seg = camp; this.storyEnd = false; this.strT = 8; this.gateMsgT = 0;
+    this.seg = camp; this.storyEnd = false; this.strT = 8; this.gateMsgT = 0; this.holdT = -1; S.hold = 0;
     this.woke = GROUPS.map((g) => g.seg < camp);
     this.campDone = CAMPS.map((_, k) => k < camp);
     for (let k = 0; k < camp; k++) this.openGate(k, false);
     S.owned = STORY_OWNED();
     S.weapon = 2; S.grenades = 1; S.stock = { bazooka: 0, flamer: 0 };
     if (sv) {
-      Object.assign(S, { hp: sv.hp, armor: sv.armor, medkits: sv.medkits, grenades: sv.grenades, owned: SLOTS.map((_, k) => !!sv.owned[k]), ap: sv.ap ?? 0, inc: sv.inc ?? 0, stock: { bazooka: 0, flamer: 0, ...(sv.stock ?? {}) }, clip: { ...fullClips(), ...sv.clip }, weapon: sv.weapon, kills: sv.kills, score: sv.score, time: sv.time });
+      Object.assign(S, { hp: sv.hp, armor: sv.armor, medkits: sv.medkits, grenades: sv.grenades, owned: SLOTS.map((_, k) => !!sv.owned[k]), ap: sv.ap ?? 0, inc: sv.inc ?? 0, ex: sv.ex ?? 0, stock: { bazooka: 0, flamer: 0, ...(sv.stock ?? {}) }, clip: { ...fullClips(), ...sv.clip }, weapon: sv.weapon, kills: sv.kills, score: sv.score, time: sv.time });
       Object.assign(S, { level: sv.level ?? 1, xp: sv.xp ?? 0, parts: sv.parts ?? 0, up: { ...S.up, ...(sv.up ?? {}) } });
       S.maxHp = heroMaxHp(); S.clip = { ...fullClips(), ...sv.clip }; S.hp = Math.min(S.hp, S.maxHp);
       // ящик с оружием, которое уже есть, не нужен
@@ -1093,6 +1111,70 @@ class Game extends Phaser.Scene {
     if (NET.role === "host") send({ t: "gate", k });
     this.buildGrid(); this.flowCell = -1;
   }
+  /** оборона: у заслона кодовый замок — пока подбирается код, держимся против всё больших толп */
+  holdTick(k: number, total: number, dt: number) {
+    const gy = this.gates[k].y, all = this.targets();
+    if (this.holdT < 0) {
+      // начинаем, когда кто-то подошёл к замку
+      if (!all.some((p) => p.y < gy + 320)) {
+        this.gateMsgT -= dt;
+        if (this.gateMsgT <= 0) { this.gateMsgT = 3; S.msg = t("st_hold_go"); S.msgT = 2.4; }
+        return;
+      }
+      this.holdT = total; this.holdSp = 2; S.holdMax = total;
+      S.bannerText = t("st_hold"); S.bannerN++; S.msg = t("st_hold_d"); S.msgT = 4;
+      sfx("thunder", 0.8); sfx("roar", 0.8);
+    }
+    this.holdT -= dt; S.hold = Math.max(0, this.holdT);
+    this.holdNet -= dt;
+    if (NET.role === "host" && this.holdNet <= 0) { this.holdNet = 0.5; send({ t: "hold", v: S.hold, m: total }); }
+    if (this.holdT <= 0) {
+      this.holdT = 0; S.hold = 0; this.holdG?.clear();
+      if (NET.role === "host") send({ t: "hold", v: 0, m: total });
+      this.openGate(k, true); S.msg = t("st_hold_ok"); S.msgT = 3;
+      return;
+    }
+    // наплыв: чем дольше, тем чаще и тем страшнее; с каждым игроком — ещё гуще
+    const el = total - this.holdT, u = el / total, pl = all.length;
+    this.holdSp -= dt;
+    const live = this.enemies.filter((e) => !e.dead).length;
+    if (this.holdSp <= 0 && live < 45 + 15 * (pl - 1)) {
+      this.holdSp = Math.max(0.28, 1.9 - u * 1.6) / (1 + 0.45 * (pl - 1));
+      const pool: Kind[] = ["zombie", "zombie", "runner"];
+      if (u > 0.2) pool.push("runner", "spitter", "hyena");
+      if (u > 0.4) pool.push("armored", "bloater", "panther");
+      if (u > 0.65) pool.push("brute", "armored", "spitter");
+      if (u > 0.85) pool.push("brute", "bear");
+      const n = 1 + Math.floor(u * 3 + Math.random() * 1.5);
+      const v = this.cameras.main.worldView;
+      for (let j = 0; j < n; j++) {
+        // снизу из-за края экрана и с боков участка
+        const side = Math.random();
+        const x = side < 0.6 ? (LANE ? rand(LANE[0] + 60, LANE[1] - 60) : rand(240, W - 240)) : side < 0.8 ? (LANE ? LANE[0] + 50 : 150) : (LANE ? LANE[1] - 50 : W - 150);
+        const y = side < 0.6 ? Math.min(H - 80, v.bottom + rand(60, 160)) : rand(gy + 380, gy + 900);
+        const kd = Phaser.Utils.Array.GetRandom(pool);
+        const q = this.collide(x, y, KINDS[kd].r);
+        this.addEnemy(kd, q.x, q.y, this.eid++).seg = -1;
+      }
+    }
+    this.drawHoldPanel(gy);
+  }
+  /** пульт с кодовым замком у заслона: мигает, полоска подбора кода */
+  drawHoldPanel(gy: number) {
+    const g = (this.holdG ??= this.add.graphics());
+    const x = W / 2 + 70, y = gy + 46, f = S.holdMax ? 1 - S.hold / S.holdMax : 0, blink = Math.sin(this.time.now / 120) > 0;
+    g.clear().setDepth(y + 20);
+    g.fillStyle(0x000000, 0.3).fillEllipse(x, y + 4, 54, 14);
+    g.fillStyle(0x2a2e34, 1).fillRoundedRect(x - 20, y - 46, 40, 46, 4).lineStyle(2, 0x14161a, 1).strokeRoundedRect(x - 20, y - 46, 40, 46, 4);
+    g.fillStyle(0x0a1a10, 1).fillRect(x - 14, y - 40, 28, 14);
+    for (let i = 0; i < 4; i++) g.fillStyle(Math.random() < f + 0.1 ? 0x60ff80 : 0x1a4a24, 1).fillRect(x - 12 + i * 7, y - 36, 5, 6);
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) g.fillStyle(0x6a6e74, 1).fillRect(x - 13 + c * 9, y - 20 + r * 8, 7, 5);
+    g.fillStyle(blink ? 0xff3020 : 0x5a1a10, 1).fillCircle(x + 14, y - 44, 3.5);
+    if (blink) g.fillStyle(0xff3020, 0.25).fillCircle(x + 14, y - 44, 9);
+    // полоса над пультом
+    g.fillStyle(0x14110d, 0.85).fillRoundedRect(x - 40, y - 66, 80, 10, 5);
+    g.fillStyle(0x60ff80, 1).fillRoundedRect(x - 38, y - 64, Math.max(4, 76 * f), 6, 3);
+  }
   /** сколько врагов осталось на участке (живые + ещё спящие группы) */
   segLeft(k: number) {
     let n = 0;
@@ -1118,13 +1200,17 @@ class Game extends Phaser.Scene {
     GROUPS.forEach((g, i) => {
       if (this.woke[i] || !all.some((p) => p.y - g.y < 760)) return;
       this.woke[i] = true;
-      g.kinds.forEach((k, j) => {
-        const a = (j / g.kinds.length) * TAU, d = 30 + (j % 3) * 26;
+      // чем больше игроков (и ботов), тем больше монстров: +60% группы на каждого сверх одного
+      const extra = Math.round(g.kinds.filter((k) => k !== "boss").length * 0.6 * (all.length - 1));
+      const kinds = [...g.kinds];
+      for (let n = 0; n < extra; n++) kinds.push(Phaser.Utils.Array.GetRandom(g.kinds.filter((k) => k !== "boss")));
+      kinds.forEach((k, j) => {
+        const a = (j / kinds.length) * TAU, d = 30 + (j % 3) * 26 + Math.floor(j / 12) * 40;
         const q = this.collide(g.x + Math.cos(a) * d, g.y + Math.sin(a) * d, KINDS[k].r);
         const e = this.addEnemy(k, q.x, q.y, this.eid++);
         e.seg = g.seg;
         // «Хозяин»: огромный медведь-мутант, финал главы 5
-        if (g.boss && j === 0) { e.hp = 360; e.boss = true; e.c.setScale(1.45); S.bannerText = t("st_boss"); S.bannerN++; sfx("thunder", 1); }
+        if (g.boss && j === 0) { e.hp = e.mh = KINDS.boss.hp * (1 + 0.6 * (all.length - 1)); S.bannerText = t("st_boss"); S.bannerN++; sfx("thunder", 1); sfx("roar", 1); }
       });
     });
     // бродячие снизу — стоять на месте нельзя
@@ -1132,7 +1218,7 @@ class Game extends Phaser.Scene {
     if (this.strT <= 0) {
       this.strT = rand(8, 13);
       const v = this.cameras.main.worldView, y = v.bottom + 90;
-      if (y < H - 60 && this.enemies.filter((e) => !e.dead).length < 12) {
+      if (y < H - 60 && this.enemies.filter((e) => !e.dead).length < 12 + 6 * (all.length - 1)) {
         const q = this.collide(LANE ? rand(LANE[0] + 70, LANE[1] - 70) : rand(220, W - 220), y, 11);
         this.addEnemy(Math.random() < 0.25 ? "runner" : "zombie", q.x, q.y, this.eid++).seg = -1;
       }
@@ -1140,8 +1226,9 @@ class Game extends Phaser.Scene {
     // заслон открывается, когда участок перед ним зачищен
     const k = this.seg;
     if (k < this.gates.length && !this.gates[k].open) {
-      const left = this.segLeft(k);
-      if (left === 0) this.openGate(k, true);
+      const left = this.segLeft(k), hold = CHAPTERS[CH].hold;
+      if (left === 0 && hold && hold.gate === k) this.holdTick(k, hold.t, dt);
+      else if (left === 0) this.openGate(k, true);
       else if (this.py < this.gates[k].y + 220) {
         this.gateMsgT -= dt;
         if (this.gateMsgT <= 0) { this.gateMsgT = 3; S.msg = t("st_gate", { n: left }); S.msgT = 2.4; }
@@ -1215,26 +1302,38 @@ class Game extends Phaser.Scene {
     if (NET.role === "client") this.saveHeroNow();
   }
   storyDone() {
+    if (this.storyEnd) return;
     this.storyEnd = true;
     const last = CH >= CHAPTERS.length - 1;
-    S.bannerText = last ? t("st_win") : t("st_done", { n: CH + 1 }); S.bannerN++;
-    S.msg = last ? t("st_win_d", { name: S.hero || t("player") }) : t("st_next", { n: CH + 2 }); S.msgT = 6;
     sfx("wave", 0.9);
     unlockChapter(last ? CHAPTERS.length : CH + 2);
-    if (NET.role === "client") { this.saveHeroNow(); if (last) this.time.delayedCall(9000, () => this.toMenu()); return; }
-    if (last) { saveStory(null); this.time.delayedCall(9000, () => this.toMenu()); return; }
-    // следующая глава: сохраняемся в её начале и перестраиваем мир (гости перестроятся по новому «hi»)
+    // кто ещё бродит — падает (окно итогов не должно закрываться смертью)
+    if (NET.role !== "client") for (const e of this.enemies) if (!e.dead) { e.dead = true; this.fireOff(e); this.tweens.add({ targets: e.c, alpha: 0, duration: 600, onComplete: () => e.c.destroy() }); }
+    S.hp = Math.max(S.hp, 1);
+    const fin = { ...CS };
+    this.time.delayedCall(900, () => {
+      this.input.keyboard!.resetKeys();
+      openDone({
+        title: last ? t("st_win") : t("st_survived"),
+        sub: last ? t("st_win_d", { name: S.hero || t("player") }) : t("st_done_ch", { n: CH + 1, name: t(`st_th_${CHAPTERS[CH].theme}` as Key) }),
+        stats: fin, last, client: NET.role === "client",
+        go: () => { closeMenu(); if (last) this.toMenu(); else if (NET.role !== "client") this.scene.restart(); },
+      });
+    });
+    if (NET.role === "client") { this.saveHeroNow(); return; }
+    if (last) { saveStory(null); return; }
+    // следующая глава: сохраняемся в её начале; мир перестроится по кнопке «Продолжить путь» (гости — по новому «hi»)
     storyCh = CH + 1;
-    saveStory({ ch: storyCh + 1, camp: 0, hp: S.maxHp, armor: S.armor, medkits: S.medkits, grenades: Math.max(S.grenades, 2), owned: [...S.owned], ap: S.ap, inc: S.inc, stock: { ...S.stock }, clip: fullClips(), weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } });
-    this.time.delayedCall(6000, () => this.scene.restart());
+    saveStory({ ch: storyCh + 1, camp: 0, hp: S.maxHp, armor: S.armor, medkits: S.medkits, grenades: Math.max(S.grenades, 2), owned: [...S.owned], ap: S.ap, inc: S.inc, ex: S.ex, stock: { ...S.stock }, clip: fullClips(), weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } });
   }
   saveHeroNow() { saveHero({ level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } }); }
   saveCamp(camp: number) {
-    const sv: StorySave = { ch: CH + 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], ap: S.ap, inc: S.inc, stock: { ...S.stock }, clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up } };
+    const sv: StorySave = { ch: CH + 1, camp, hp: S.hp, armor: S.armor, medkits: S.medkits, grenades: S.grenades, owned: [...S.owned], ap: S.ap, inc: S.inc, ex: S.ex, stock: { ...S.stock }, clip: { ...S.clip }, weapon: S.weapon, kills: S.kills, score: S.score, time: Math.round(S.time), level: S.level, xp: S.xp, parts: S.parts, up: { ...S.up }, cs: { ...CS } };
     saveStory(sv);
   }
   /** сюжет: погиб — назад в последний лагерь (или к дому) */
   storyDeath() {
+    CS.deaths++;
     S.msg = t("st_dead"); S.msgT = 3;
     if (NET.role === "client") return; // гостя вернёт хозяин (пришлёт новый «hi»)
     this.time.delayedCall(2600, () => this.scene.restart());
@@ -1854,7 +1953,7 @@ class Game extends Phaser.Scene {
       b.tick -= dt;
       if (b.tick > 0 || NET.role === "client") continue;
       b.tick = 0.4;
-      for (const e of this.enemies) if (!e.dead && Math.hypot(e.x - b.x, e.y - b.y) < 30 + KINDS[e.kind].r) {
+      for (const e of this.enemies) if (!e.dead && e.kind !== "boss" && Math.hypot(e.x - b.x, e.y - b.y) < 30 + KINDS[e.kind].r) {
         e.hp -= 1; e.hitT = 0.07;
         if (e.hp <= 0) this.kill(e, rand(0, TAU));
       }
@@ -2063,18 +2162,18 @@ class Game extends Phaser.Scene {
   /** спецпатроны: обычные → бронебойные → зажигательные (только те, что есть) */
   setAmmo(k: number) {
     if (S.over || S.chatOpen || this.dead || S.ammoK === k) return;
-    if ((k === 1 && S.ap <= 0) || (k === 2 && S.inc <= 0)) return;
+    if ((k === 1 && S.ap <= 0) || (k === 2 && S.inc <= 0) || (k === 3 && S.ex <= 0)) return;
     S.ammoK = k;
-    S.msg = t((["ammo_n", "ammo_ap", "ammo_inc"] as Key[])[k]); S.msgT = 1;
+    S.msg = t((["ammo_n", "ammo_ap", "ammo_inc", "ammo_ex"] as Key[])[k]); S.msgT = 1;
     sfx("swap");
   }
   cycleAmmo() {
     if (S.over || S.chatOpen || this.dead) return;
-    for (let k = 1; k <= 3; k++) {
-      const n = (S.ammoK + k) % 3;
-      if (n === 0 || (n === 1 && S.ap > 0) || (n === 2 && S.inc > 0)) { S.ammoK = n; break; }
+    for (let k = 1; k <= 4; k++) {
+      const n = (S.ammoK + k) % 4;
+      if (n === 0 || (n === 1 && S.ap > 0) || (n === 2 && S.inc > 0) || (n === 3 && S.ex > 0)) { S.ammoK = n; break; }
     }
-    S.msg = t((["ammo_n", "ammo_ap", "ammo_inc"] as Key[])[S.ammoK]); S.msgT = 1;
+    S.msg = t((["ammo_n", "ammo_ap", "ammo_inc", "ammo_ex"] as Key[])[S.ammoK]); S.msgT = 1;
     sfx("swap");
   }
   startReload() {
@@ -2133,6 +2232,9 @@ class Game extends Phaser.Scene {
     if (n >= 4) for (let i = 0; i < n - 3; i++) q.push("panther");
     if (n >= 5) for (let i = 0; i < Math.floor((n - 3) / 2); i++) q.push("bear");
     if (n >= 3) for (let i = 0; i < Math.floor(n / 2); i++) q.push("spitter");
+    // больше игроков — больше монстров: +60% волны на каждого сверх одного
+    const np = this.targets().length, base = q.length;
+    for (let i = 0; i < Math.round(base * 0.6 * (np - 1)); i++) q.push(q[i % base]);
     Phaser.Utils.Array.Shuffle(q);
     this.spawnQ = q;
     S.msg = t("wave_n", { n });
@@ -2164,8 +2266,9 @@ class Game extends Phaser.Scene {
       e.c = this.add.container(x, y, [sh, e.img]);
     } else {
       const [sk, pal] = kind === "zombie" ? ["zA", PAL_ZOMBIE_A] as const : kind === "spitter" ? ["zC", PAL_ZOMBIE_C] as const
-        : kind === "armored" ? ["zD", PAL_ZOMBIE_D] as const : kind === "brute" ? ["zE", PAL_ZOMBIE_E] as const : kind === "bloater" ? ["zF", PAL_ZOMBIE_F] as const : ["zB", PAL_ZOMBIE_B] as const;
+        : kind === "armored" ? ["zD", PAL_ZOMBIE_D] as const : kind === "brute" ? ["zE", PAL_ZOMBIE_E] as const : kind === "bloater" ? ["zF", PAL_ZOMBIE_F] as const : kind === "boss" ? ["zBoss", PAL_BOSS] as const : ["zB", PAL_ZOMBIE_B] as const;
       e.hum = new Humanoid(this, x, y, sk, pal, false);
+      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; }
       if (kind === "spitter") e.throwT = rand(1.5, 3);
       if (kind === "armored") { e.arm = ARMOR_PTS; e.hum.setArmor(true); }
       e.c = e.hum.c;
@@ -2219,6 +2322,57 @@ class Game extends Phaser.Scene {
       const sz = rand(0.6, 1.3) * (e.kind === "bear" ? 1.6 : e.kind === "rat" ? 0.6 : 1);
       this.gib("gib_chunk", Phaser.Utils.Array.GetRandom(cols), e.x, e.y, rand(6, 14), dir + rand(-0.9, 0.9), rand(40, 140) * force, rand(80, 230) * force, { scale: sz, blood: K_.blood });
     }
+  }
+
+  /** «Хозяин»: стадии разрушения, огненный след, залпы плевков */
+  bossTick(e: Enemy, dt: number, moved: number, tg: { x: number; y: number } | null) {
+    const f = e.hp / (e.mh ?? KINDS.boss.hp), stage = f < 0.3 ? 3 : f < 0.55 ? 2 : f < 0.8 ? 1 : 0;
+    while ((e.stage ?? 0) < stage) { e.stage = (e.stage ?? 0) + 1; this.bossBreak(e, e.stage); }
+    const rage = e.stage ?? 0;
+    // за ним горит земля
+    e.trailT = (e.trailT ?? 0) - dt;
+    if (e.trailT <= 0 && moved > 0.2) { e.trailT = 0.3; this.addBurn(e.x - Math.cos(e.a) * 26, e.y - Math.sin(e.a) * 26, 5); }
+    if (!tg) return;
+    const d = Math.hypot(tg.x - e.x, tg.y - e.y);
+    if (d > 620) return;
+    // залп веером, потом очередь прицельных — с каждой стадией чаще и гуще
+    e.shotT = (e.shotT ?? 2) - dt;
+    if (e.shotT <= 0) {
+      e.shotT = 2 - rage * 0.35;
+      const n = 5 + rage * 2, base = Math.atan2(tg.y - e.y, tg.x - e.x), r = Math.min(d, 420);
+      for (let k = 0; k < n; k++) {
+        const a = base + (k - (n - 1) / 2) * 0.17;
+        this.throwSpit(e.id, e.x + Math.cos(a) * 30, e.y + Math.sin(a) * 30, e.x + Math.cos(a) * r, e.y + Math.sin(a) * r);
+      }
+      e.burst = 3 + rage * 2; e.burstT = 0.5;
+      if (e.hum) e.hum.recoil = 1;
+      this.cameras.main.shake(120, 0.003);
+    }
+    if ((e.burst ?? 0) > 0) {
+      e.burstT = (e.burstT ?? 0) - dt;
+      if (e.burstT <= 0) { e.burstT = 0.17; e.burst!--; this.throwSpit(e.id, e.x, e.y, tg.x + rand(-30, 30), tg.y + rand(-30, 30)); }
+    }
+  }
+  /** босс разваливается: левая рука, правая рука, латы с груди */
+  bossBreak(e: Enemy, st: number) {
+    const dir = e.a + Math.PI + rand(-0.6, 0.6);
+    e.bossPart = true;
+    if (st === 1) this.hitFx(e, dir, 10, 2, 0);
+    else if (st === 2) this.hitFx(e, dir, 10, 2, 1);
+    else { this.hitFx(e, dir, 14, 2.2, -1); if (e.plates) { e.plates = false; this.breakArmor(e); } }
+    e.bossPart = false;
+    sfx("roar", 1); this.cameras.main.shake(380, 0.008);
+    for (let i = 0; i < 6; i++) this.splat(e.x + rand(-30, 30), e.y + rand(-20, 20), KINDS.boss.blood, rand(3, 6));
+  }
+  /** догорает труп: пламя ещё пару секунд (только вид) */
+  addCorpseFire(x: number, y: number) {
+    const f = this.flames(x, y - 4, 0.7);
+    this.time.delayedCall(2200, () => { f.stop(); this.time.delayedCall(800, () => f.destroy()); });
+  }
+  /** горящая земля (огненный след босса): жжёт игроков, видна всем */
+  addBurn(x: number, y: number, t: number) {
+    this.burns.push({ x, y, t, fire: this.flames(x, y - 2, 0.8), tick: 0 });
+    if (NET.role === "host") send({ t: "burn", x: x | 0, y: y | 0, tt: t });
   }
 
   /** оторвать руку зомби */
@@ -2439,20 +2593,44 @@ class Game extends Phaser.Scene {
 
   /** ранение монстра без смерти: ошмётки, иногда отрывает руку; хозяин рассылает гостям */
   hitFx(e: Enemy, dir: number, n: number, force: number, arm: number, legs = false) {
+    // у босса руки отваливаются только по стадиям (bossBreak), не от случайного попадания
+    if (e.kind === "boss" && NET.role !== "client" && !e.bossPart) { arm = -1; legs = false; }
     this.chunks(e, dir, n, force);
     if (arm >= 0 && e.hum) this.tearArm(e, arm, dir, force > 1 ? 1.5 : 1);
     if (legs && e.hum && !e.hum.crawl) this.makeCrawler(e, dir);
     if (NET.role === "host") send({ t: "hit", id: e.id, dir, n, f: force, arm, legs: legs ? 1 : 0 });
   }
 
+  /** разрывная пуля: двойной урон, вспышка, задевает соседей и рвёт на куски (руки, ноги, ошмётки) */
+  exHit(e: Enemy, b: Bullet) {
+    const dir = Math.atan2(b.dy, b.dx), x = e.x - b.dx * 6, y = e.y - b.dy * 6;
+    const vol = this.near(e.x, e.y);
+    sfx("boom", vol * 0.35); sfx("gore", vol * 0.8);
+    this.blood.setParticleTint(0xffc040); this.blood.explode(10, x, y - 14);
+    this.blood.setParticleTint(KINDS[e.kind].blood); this.blood.explode(18, x, y - 10);
+    this.shock(x, y, 0.22);
+    this.splat(e.x + b.dx * 14, e.y + b.dy * 10, KINDS[e.kind].blood, rand(4, 7));
+    for (const q of this.enemies) {
+      if (q.dead || Math.hypot(q.x - x, q.y - y) > 46 + KINDS[q.kind].r) continue;
+      const kb = (b.kb * 1.8) / KINDS[q.kind].mass;
+      q.hp -= q === e ? b.dmg * 2 : b.dmg * 0.7; q.hitT = 0.08;
+      q.kx += b.dx * kb; q.ky += b.dy * kb;
+      if (q.hp <= 0) { this.kill(q, dir); this.chunks(q, dir, 8, 1.8); for (let i = 0; i < 3; i++) this.splat(q.x + rand(-24, 24), q.y + rand(-18, 18), KINDS[q.kind].blood, rand(3, 6)); continue; }
+      if (q !== e) continue;
+      const legs = (q.kind === "zombie" || q.kind === "runner") && !q.hum?.crawl && Math.random() < 0.45;
+      if (legs) this.makeCrawler(q, dir);
+      this.hitFx(q, dir, 3, 1.6, q.hum ? (Math.random() < 0.5 ? 0 : 1) : -1, legs);
+      this.chunks(q, dir, 3, 1.3);
+    }
+  }
   /** подобрал патроны (свои — сразу, гостю — подарком от хозяина). false — некуда (всё полно) */
   takeAmmo(k: ItemKind) {
     const n = AMMO_GIVE[k] ?? 0;
-    if (k === "ap" || k === "inc") {
+    if (k === "ap" || k === "inc" || k === "ex") {
       if (S[k] >= AMMO_MAX) return false;
       S[k] = Math.min(AMMO_MAX, S[k] + n);
       // первые спецпатроны — сразу заряжены
-      if (!S.ammoK) S.ammoK = k === "ap" ? 1 : 2;
+      if (!S.ammoK) S.ammoK = k === "ap" ? 1 : k === "inc" ? 2 : 3;
     } else {
       const id: WeaponId = k === "rocket" ? "bazooka" : "flamer", max = STOCK_MAX[id]!;
       if ((S.stock[id] ?? 0) >= max) return false;
@@ -2693,7 +2871,7 @@ class Game extends Phaser.Scene {
   /** опыт: уровни растут сами, на новом уровне — бонус и полное здоровье */
   gainXp(n: number) {
     if (S.level >= MAX_LV) return;
-    S.xp += n;
+    S.xp += n; CS.xp += n;
     while (S.level < MAX_LV && S.xp >= xpNeed(S.level)) {
       S.xp -= xpNeed(S.level); S.level++;
       const r = (S.level - 2) % 4;
@@ -2711,7 +2889,7 @@ class Game extends Phaser.Scene {
   }
   gainParts(n: number, x: number, y: number) {
     if (n <= 0) return;
-    S.parts += n;
+    S.parts += n; CS.parts += n;
     this.popup(x, y, `+${n} ${t("parts_s")}`, "#9fd8ff");
   }
   /** улучшить оружие на верстаке */
@@ -2729,7 +2907,8 @@ class Game extends Phaser.Scene {
   kill(e: Enemy, dir: number) {
     if (NET.role === "host") send({ t: "kill", id: e.id, dir });
     e.dead = true;
-    S.kills++;
+    S.kills++; CS.kills++;
+    if (e.burn && e.burn > 0) { e.burn = 0; this.fireOff(e); this.addCorpseFire(e.x, e.y); }
     S.score += KINDS[e.kind].score;
     this.popup(e.x, e.y - 34, `+${KINDS[e.kind].score}`, e.kind === "bear" ? "#ffb040" : "#ffe2a0");
     this.gainXp(KINDS[e.kind].score);
@@ -2774,7 +2953,7 @@ class Game extends Phaser.Scene {
 
   /** какие патроны выпадут: бронебойные и зажигательные всегда к месту, ракеты и топливо — если есть чем стрелять */
   ammoPick(): ItemKind {
-    const o: ItemKind[] = ["ap", "ap", "inc", "inc"];
+    const o: ItemKind[] = ["ap", "ap", "inc", "inc", "ex", "ex"];
     if (S.owned[SLOTS.indexOf("bazooka")]) o.push("rocket");
     if (S.owned[SLOTS.indexOf("flamer")]) o.push("fuel", "fuel");
     return Phaser.Utils.Array.GetRandom(o);
@@ -2794,8 +2973,12 @@ class Game extends Phaser.Scene {
   }
   /** горение: урон у хозяина, искры и оранжевый цвет — у всех */
   burnFx(e: Enemy, dt: number) {
-    if (!e.burn || e.burn <= 0) return;
+    if (!e.burn || e.burn <= 0 || e.dead) { this.fireOff(e); return; }
     e.burn -= dt;
+    // живой огонь на горящем: языки пламени над ним, видно издалека
+    const sc = KIND_SCALE[e.kind] ?? 1;
+    if (!e.fireFx) e.fireFx = this.flames(e.x, e.y, 0.8 * sc);
+    e.fireFx.setPosition(e.x, e.y - 10 * sc).setDepth(e.y + 40);
     e.burnT = (e.burnT ?? 0) - dt;
     if (e.burnT <= 0) {
       e.burnT = 0.2;
@@ -2810,6 +2993,12 @@ class Game extends Phaser.Scene {
       const c = Math.random() < 0.5 ? 0xffa050 : 0xff7a30;
       if (e.hum) { e.hum.body.setTint(c); e.hum.head.setTint(c); } else e.img?.setTint(c);
     }
+  }
+  fireOff(e: Enemy) {
+    const f = e.fireFx;
+    if (!f) return;
+    e.fireFx = undefined; f.stop();
+    this.time.delayedCall(800, () => f.destroy());
   }
   /** бензопила: удар по всем перед героем (у хозяина). x, y — где герой, a — куда смотрит, dm — множитель урона */
   sawHit(x: number, y: number, a: number, dm: number) {
@@ -2867,6 +3056,7 @@ class Game extends Phaser.Scene {
       this.aimG.clear(); this.updateMates(dt); this.netTick(dt); return;
     }
     S.time += dt;
+    if (S.story && !this.storyEnd) CS.time += dt;
 
     // ── ходьба ──
     let mx = 0, my = 0;
@@ -2940,8 +3130,8 @@ class Game extends Phaser.Scene {
           // спецпатроны (бронебойные / зажигательные) — пока не кончатся
           let ak = 0;
           if (BULLET_GUN(W_.id) && S.ammoK) {
-            if (S.ammoK === 1 && S.ap > 0) { ak = 1; S.ap--; } else if (S.ammoK === 2 && S.inc > 0) { ak = 2; S.inc--; }
-            if ((S.ammoK === 1 && S.ap <= 0) || (S.ammoK === 2 && S.inc <= 0)) { S.ammoK = 0; S.msg = t("ammo_out"); S.msgT = 1.2; }
+            if (S.ammoK === 1 && S.ap > 0) { ak = 1; S.ap--; } else if (S.ammoK === 2 && S.inc > 0) { ak = 2; S.inc--; } else if (S.ammoK === 3 && S.ex > 0) { ak = 3; S.ex--; }
+            if ((S.ammoK === 1 && S.ap <= 0) || (S.ammoK === 2 && S.inc <= 0) || (S.ammoK === 3 && S.ex <= 0)) { S.ammoK = 0; S.msg = t("ammo_out"); S.msgT = 1.2; }
           }
           this.fireT = W_.rate;
           this.muzzleT = W_.pellets > 1 ? 0.07 : 0.05;
@@ -2952,7 +3142,10 @@ class Game extends Phaser.Scene {
           for (let i = 0; i < W_.pellets; i++) as.push(Math.round((this.aimA + (W_.pellets > 1 ? ((i + Math.random()) / W_.pellets - 0.5) : Math.random() - 0.5) * W_.spread) * 1000) / 1000);
           // пуля летит от героя (чтобы попадать и в упор), видна от дула; высота добавляется при отрисовке
           const bx = Math.round(this.px + ca * 6), by = Math.round(this.py + sa * 6);
-          this.bullets.push(...shotBullets(W_, bx, by, as, NET.role === "client", ak));
+          const mine = shotBullets(W_, bx, by, as, NET.role === "client", ak);
+          for (const b of mine) b.own = true;
+          if (W_.shell !== "flame") CS.shots += mine.length;
+          this.bullets.push(...mine);
           // гость: пуля у него только для вида, попадания считает хозяин
           if (NET.role === "client") send({ t: "shot", x: bx, y: by, as, w: W_.id, dm: Math.round(W_.dmg / WEAPONS[W_.id].dmg * 100) / 100, pc: W_.pierce, ak });
           else if (NET.role === "host") send({ t: "fx", k: "shot", who: "host", x: bx, y: by, as, w: W_.id, ak });
@@ -3056,6 +3249,7 @@ class Game extends Phaser.Scene {
             break;
           }
           if (b.kind === "ap" && (e.arm ?? 0) > 0 && !b.vis) { e.arm! -= b.dmg * 0.6; if (e.arm! <= 0) this.breakArmor(e); }
+          if (b.own) { CS.hits++; CS.dmg += b.kind === "ex" ? b.dmg * 2 : b.dmg; }
           if (b.vis && !b.pierce) break;
           if (b.pierce) { b.pierce--; b.last = e; hit = false; }
           if (b.vis) continue;
@@ -3066,7 +3260,8 @@ class Game extends Phaser.Scene {
             if (e.hp <= 0) this.kill(e, Math.atan2(b.dy, b.dx));
             continue;
           }
-          if (b.kind === "fire") this.ignite(e, 2.5);
+          if (b.kind === "fire") this.ignite(e, 4);
+          if (b.kind === "ex") { this.exHit(e, b); break; }
           e.hp -= b.dmg;
           e.hitT = 0.07;
           const kb = b.kb / KINDS[e.kind].mass;
@@ -3098,7 +3293,7 @@ class Game extends Phaser.Scene {
         this.bg.lineStyle(3, 0x6a7a3a, 1).lineBetween(b.x - b.dx * 11, b.y - b.dy * 11 + gunZ, b.x - b.dx * 2, b.y - b.dy * 2 + gunZ);
         this.bg.fillStyle(0xffa030, 0.9).fillCircle(b.x - b.dx * 15, b.y - b.dy * 15 + gunZ, 4 + Math.random() * 2).fillStyle(0xfff0a0, 1).fillCircle(b.x - b.dx * 14, b.y - b.dy * 14 + gunZ, 2);
         if (Math.random() < 0.6) { this.blood.setParticleTint(0xb8b0a0); this.blood.explode(1, b.x - b.dx * 18, b.y - b.dy * 18 + gunZ); }
-      } else if (b.d > 36) this.bg.lineStyle(b.tr < 16 ? 1.8 : 2.2, b.kind === "ap" ? 0x9ae8ff : b.kind === "fire" ? 0xff7030 : 0xffe080, 0.95).lineBetween(b.x - b.dx * b.tr, b.y - b.dy * b.tr + gunZ, b.x, b.y + gunZ);
+      } else if (b.d > 36) this.bg.lineStyle(b.tr < 16 ? 1.8 : 2.2, b.kind === "ap" ? 0x9ae8ff : b.kind === "fire" ? 0xff7030 : b.kind === "ex" ? 0xffc020 : 0xffe080, b.kind === "ex" ? 1 : 0.95).lineBetween(b.x - b.dx * b.tr, b.y - b.dy * b.tr + gunZ, b.x, b.y + gunZ);
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
 
@@ -3266,6 +3461,7 @@ class Game extends Phaser.Scene {
           }
         }
       }
+      if (e.kind === "boss") this.bossTick(e, dt, moved, T.length ? tg : null);
       e.a = Phaser.Math.Angle.RotateTo(e.a, Math.atan2(dy, dx), 8 * dt);
       e.c.setPosition(e.x, e.y).setDepth(e.y);
       e.hitT -= dt;
@@ -3275,7 +3471,7 @@ class Game extends Phaser.Scene {
       } else if (e.img) {
         // спрайт смотрит вверх — поворачиваем; походка — лёгкое покачивание
         e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
-        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss ? 0xe08878 : 0xd8e0c8);
+        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss && e.kind !== "boss" ? 0xe08878 : 0xd8e0c8);
       }
       this.burnFx(e, dt);
       if (e.dead) continue;
@@ -3541,12 +3737,14 @@ class Game extends Phaser.Scene {
       case "hi": pendingHi = m; this.applyHi(m); if (m.name) S.myName = m.name; break;
       case "chat": this.addChat(String(m.who), String(m.text).slice(0, 120)); break;
       case "kill": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) this.kill(e, m.dir); break; }
+      case "burn": this.burns.push({ x: m.x, y: m.y, t: m.tt, fire: this.flames(m.x, m.y - 2, 0.8), tick: 99 }); break;
       case "hit": { const e = this.enemies.find((q) => q.id === m.id); if (e && !e.dead) { e.hitT = 0.07; this.hitFx(e, m.dir, m.n, m.f, m.arm, !!m.legs); sfx("hit", this.near(e.x, e.y)); } break; }
       case "boom": this.explode(m.x, m.y, m.p || 1); break;
       case "prop": { const p = this.props.find((q) => q.id === m.id); if (p) this.breakProp(p, true); break; }
       case "spit": { this.spawnSpit(m.x, m.y, m.z, m.vx, m.vy, m.vz, true); const e = this.enemies.find((q) => q.id === m.id); if (e?.hum) e.hum.recoil = 0.25; sfx("splat", this.near(m.x, m.y) * 0.8); break; }
       case "hurt": this.hurtPlayer(m.dmg, true); break;
       case "gate": if (S.story) this.openGate(m.k | 0, true); break;
+      case "hold": if (S.story) { S.hold = +m.v || 0; S.holdMax = +m.m || 0; const hd = CHAPTERS[CH].hold; if (hd && S.hold > 0) this.drawHoldPanel(this.gates[hd.gate]?.y ?? 0); else this.holdG?.clear(); } break;
       case "camp": if (S.story && CAMPS[m.i | 0]) this.campReached(m.i | 0); break;
       case "stend": if (S.story) this.storyDone(); break;
       case "tp": { const q = this.collide(Number(m.x), Number(m.y), 10); this.px = q.x; this.py = q.y; break; }
@@ -3683,7 +3881,7 @@ class Game extends Phaser.Scene {
       if (e.hum) { e.hum.recoil = Math.max(0, e.hum.recoil - dt * 2.5); e.hum.pose(e.a, e.a, e.ph, 1, false, Math.sin(e.ph * 0.5)); e.hum.flash(e.hitT > 0); }
       else if (e.img) {
         e.img.setRotation(e.a + Math.PI / 2 + Math.sin(e.ph) * 0.08);
-        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss ? 0xe08878 : 0xd8e0c8);
+        e.hitT > 0 ? e.img.setTintFill(0xffffff) : e.img.setTint(e.boss && e.kind !== "boss" ? 0xe08878 : 0xd8e0c8);
       }
       this.burnFx(e, dt);
       e.voice -= dt;
@@ -3717,6 +3915,19 @@ class UI extends Phaser.Scene {
   g!: Phaser.GameObjects.Graphics;
   info!: Phaser.GameObjects.Text;
   big!: Phaser.GameObjects.Text;
+  holdTx?: Phaser.GameObjects.Text;
+  /** оборона: таймер «держитесь» сверху по центру */
+  drawHold(g: Phaser.GameObjects.Graphics, w: number) {
+    const on = S.story && S.hold > 0 && !S.over && !S.inv;
+    if (!on) { this.holdTx?.setVisible(false); return; }
+    const sc = Math.min(1.2, Math.max(0.75, w / 1000));
+    const tx = (this.holdTx ??= this.add.text(0, 0, "", { fontFamily: "system-ui, sans-serif", fontSize: "20px", fontStyle: "900", color: "#ffe2a0", stroke: "#14110d", strokeThickness: 5, align: "center" }).setOrigin(0.5, 0).setDepth(5));
+    const s = Math.ceil(S.hold), mm = Math.floor(s / 60), ss = s % 60, hot = s <= 10;
+    tx.setText(`${t("st_hold_t")}  ${mm}:${String(ss).padStart(2, "0")}`).setFontSize(22 * sc).setColor(hot ? "#ff9a60" : "#ffe2a0").setPosition(w / 2, 88 * sc).setVisible(true);
+    const bw = 260 * sc, y = 88 * sc + tx.height + 4, f = S.holdMax ? 1 - S.hold / S.holdMax : 0;
+    g.fillStyle(0x14110d, 0.7).fillRoundedRect(w / 2 - bw / 2 - 3, y - 3, bw + 6, 12 * sc + 6, 7 * sc);
+    g.fillStyle(0x60ff80, 0.95).fillRoundedRect(w / 2 - bw / 2, y, Math.max(6, bw * f), 12 * sc, 6 * sc);
+  }
   help!: Phaser.GameObjects.Text;
   net!: Phaser.GameObjects.Text;
   btn: Phaser.GameObjects.Text[] = [];
@@ -3975,7 +4186,7 @@ class UI extends Phaser.Scene {
     if (BULLET_GUN(W_.id)) {
       const by = y + 31 * sc, bh2 = 22 * sc;
       let bx2 = stripX;
-      const kinds = [[t("ammo_n_s"), -1, "#f2ead8", 0xffe2a0], [t("ammo_ap_s"), S.ap, "#9ae8ff", 0x9ae8ff], [t("ammo_inc_s"), S.inc, "#ff9a50", 0xff9a50]] as const;
+      const kinds = [[t("ammo_n_s"), -1, "#f2ead8", 0xffe2a0], [t("ammo_ap_s"), S.ap, "#9ae8ff", 0x9ae8ff], [t("ammo_inc_s"), S.inc, "#ff9a50", 0xff9a50], [t("ammo_ex_s"), S.ex, "#ffd040", 0xffd040]] as const;
       kinds.forEach(([lb, n, col, line], k) => {
         const sel = S.ammoK === k, has = n !== 0;
         const tx = this.txt(n < 0 ? `${lb}` : `${lb} ${n}`, bx2 + 10 * sc, by + 0.5, 12 * sc, has ? (sel ? col : "#c8bfa8") : "#6a6252");
@@ -4126,7 +4337,7 @@ class UI extends Phaser.Scene {
     // патроны: нажми — следующие (обычные → бронебойные → зажигательные)
     const ay = iy + ih + 8, ah = 32, on = S.ammoK;
     g.fillStyle(on ? 0x1c3440 : 0x2a241a, 1).fillRoundedRect(rx, ay, rw, ah, 8).lineStyle(2, on === 1 ? 0x9ae8ff : on === 2 ? 0xff9a50 : 0x5a5040, 0.8).strokeRoundedRect(rx, ay, rw, ah, 8);
-    text(rx + 12, ay + ah / 2, `${t("ammo")}: ${t((["ammo_n", "ammo_ap", "ammo_inc"] as Key[])[on])}   ·   ${t("ammo_ap_s")} ${S.ap}   ${t("ammo_inc_s")} ${S.inc}${S.touch ? "" : "   [B]"}`, 12, "#f2ead8", 0);
+    text(rx + 12, ay + ah / 2, `${t("ammo")}: ${t((["ammo_n", "ammo_ap", "ammo_inc", "ammo_ex"] as Key[])[on])}   ·   ${t("ammo_ap_s")} ${S.ap}   ${t("ammo_inc_s")} ${S.inc}   ${t("ammo_ex_s")} ${S.ex}${S.touch ? "" : "   [B]"}`, 12, "#f2ead8", 0);
     hits.push({ x: rx, y: ay, w: rw, h: ah, fn: () => gm.cycleAmmo() });
     text(narrow ? x0 + pw / 2 : rx + rw / 2, y0 + ph - 22, S.touch ? t("inv_close_touch") : `${t("inv_close_key")}${NET.role === "solo" ? t("paused_note") : ""}`, 12, "#a89f88");
     outside();
@@ -4224,6 +4435,7 @@ class UI extends Phaser.Scene {
       this.big.setPosition(w / 2, h * (under ? 0.44 : 0.28)).setText(S.msg).setFontSize(long ? Math.min(24, w / 30) : 42).setWordWrapWidth(w * 0.86, true).setAlpha(wv ? 0 : Phaser.Math.Clamp(S.msgT, 0, 1));
     }
     this.drawBanner(g, w, h, dt);
+    this.drawHold(g, w);
     this.drawRain(w, h, dt);
     // кнопка паузы (в кооперативе мир не останавливается — кнопки нет)
     if (!S.over && NET.role === "solo") {

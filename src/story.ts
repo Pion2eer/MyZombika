@@ -6,14 +6,14 @@ import type { Kind } from "./main";
 /** Восемь глав «Дорога на север». Каждая — своя местность (земля, деревья, предметы), длина и враги. */
 export type Theme = "farm" | "road" | "waste" | "town" | "junk" | "factory" | "tunnel" | "dam";
 /** weapons — ящики с оружием: номер ячейки (0 автомат, 1 дробовик, 4 базука, 5 огнемёт, 6 пила) и участок */
-export interface ChapterDef { theme: Theme; segs: number; tint: number; weapons?: { slot: number; seg: number }[]; boss?: boolean }
+export interface ChapterDef { theme: Theme; segs: number; tint: number; weapons?: { slot: number; seg: number }[]; boss?: boolean; /** оборона: у этого заслона взламываем кодовый замок и держимся t секунд */ hold?: { gate: number; t: number } }
 export const CHAPTERS: ChapterDef[] = [
   { theme: "farm", segs: 4, tint: 0xffffff, weapons: [{ slot: 1, seg: 1 }, { slot: 6, seg: 3 }] }, // дробовик, бензопила
   { theme: "road", segs: 4, tint: 0xe6dcc0, weapons: [{ slot: 0, seg: 0 }] }, // автомат
   { theme: "waste", segs: 4, tint: 0xe8d8b0 }, // пустырь
   { theme: "town", segs: 5, tint: 0xc8ccc4, weapons: [{ slot: 4, seg: 2 }] }, // базука
   { theme: "junk", segs: 4, tint: 0xd0c4a8 }, // свалка
-  { theme: "factory", segs: 5, tint: 0xb8b0a0, weapons: [{ slot: 5, seg: 1 }] }, // огнемёт
+  { theme: "factory", segs: 5, tint: 0xb8b0a0, weapons: [{ slot: 5, seg: 1 }], hold: { gate: 3, t: 90 } }, // огнемёт
   { theme: "tunnel", segs: 4, tint: 0x9a9aa4 }, // туннель: темно, разбитые машины
   { theme: "dam", segs: 5, tint: 0xb8ccd0, boss: true },
 ];
@@ -74,7 +74,7 @@ export function setChapter(ch: number) {
     }
   }
   // финал: «Хозяин» у плотины
-  if (C.boss) GROUPS.push({ seg: C.segs - 1, x: STORY_W / 2, y: EXIT_Y + 420, kinds: ["bear", "brute", "armored", "armored", "spitter", "spitter", "panther", "bloater"], boss: true });
+  if (C.boss) GROUPS.push({ seg: C.segs - 1, x: STORY_W / 2, y: EXIT_Y + 420, kinds: ["boss", "brute", "armored", "armored", "spitter", "spitter", "panther", "bloater"], boss: true });
   WEAPON_CRATES = (C.weapons ?? []).map((w, i) => ({ x: i % 2 ? 420 : 1180, y: w.seg === 0 ? STORY_H - 1500 : GATES[w.seg - 1] - 900, slot: w.slot }));
 }
 setChapter(0);
@@ -85,7 +85,7 @@ export interface StorySave {
   /** прокачка (с 0.12) */
   level?: number; xp?: number; parts?: number; up?: Record<string, number>;
   /** спецпатроны и запас ракет/топлива (с 0.15) */
-  ap?: number; inc?: number; stock?: Record<string, number>;
+  ap?: number; inc?: number; ex?: number; /** итоги главы до сохранения */ cs?: import("./main").ChStats; stock?: Record<string, number>;
 }
 const KEY = "myzombika-story";
 export function loadStory(): StorySave | null {
@@ -97,7 +97,7 @@ export function loadStory(): StorySave | null {
   } catch { return null; }
 }
 /** сколько глав открыто (номер самой дальней доступной главы, с 1): не сбрасывается новой игрой и концом игры */
-const BEST = "myzombika-best";
+const BEST = "myzombika-chapters";
 export function unlockedChapters(): number {
   let b = 1;
   try { b = Math.max(1, Number(localStorage.getItem(BEST)) || 1); } catch { /* приватный режим */ }

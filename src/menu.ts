@@ -34,7 +34,7 @@ setLang(settings.lang);
 export interface MenuActions { waves(): void; story?(fresh: boolean, ch?: number): void; host(): void; join(code: string): void; changed(): void; again?(): void; menu?(): void }
 
 let root: HTMLDivElement | null = null;
-let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" = "main";
+let page: "main" | "coop" | "settings" | "howto" | "top" | "over" | "story" | "done" = "main";
 let acts: MenuActions | null = null;
 let joinCode = "";
 
@@ -82,6 +82,9 @@ const CSS = `
 .mz .stat i{display:block;width:22px;height:22px;margin:0 auto 2px;color:#ffb060}.mz .stat i svg{width:100%;height:100%;display:block}
 .mz .stat b{display:block;font-size:24px;color:#ffe2a0;font-variant-numeric:tabular-nums}
 .mz .stat span{font-size:12px;color:#b8ae96}
+.mz .over.win h1{color:#c8f070;text-shadow:0 3px 0 #1a3a0a,0 6px 18px rgba(0,0,0,.8);font-size:clamp(44px,9vw,68px)}
+.mz .over.win .sub{margin:0 0 6px;font-size:14px;letter-spacing:.3px}
+.mz .over.win .stats{grid-template-columns:repeat(4,1fr)}
 .mz .stat.hi{border-color:#ffb060;background:rgba(70,40,16,.92)}
 .mz .rec{margin:0 0 6px;color:#c8bfa8}.mz .rec.new{color:#c8f070;font-weight:800;font-size:18px}
 .mz .lb{min-height:22px;margin:0 0 12px;color:#ddd3bc}.mz .lb b{color:#ffe2a0}
@@ -107,6 +110,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
 // пиктограммы пунктов меню (линии 24×24, цвет — от кнопки)
 const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON = {
+  // прицел: меткость
+  aim: svg('<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5" stroke="currentColor" stroke-width="2"/>'),
+  // шестерёнка: детали
+  parts: svg('<path fill="currentColor" stroke="none" fill-rule="evenodd" d="M10.3 2h3.4l.5 2.6 1.9.8 2.2-1.5 2.4 2.4-1.5 2.2.8 1.9 2.6.5v3.4l-2.6.5-.8 1.9 1.5 2.2-2.4 2.4-2.2-1.5-1.9.8-.5 2.6h-3.4l-.5-2.6-1.9-.8-2.2 1.5-2.4-2.4 1.5-2.2-.8-1.9L2 13.7v-3.4l2.6-.5.8-1.9-1.5-2.2 2.4-2.4 2.2 1.5 1.9-.8zM12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/>'),
+  // взрыв: урон
+  dmg: svg('<path fill="currentColor" stroke="none" d="M12 1l2.2 6.3L20.5 4l-3 6 5.5 2-5.5 2 3 6-6.3-3.3L12 23l-2.2-6.3L3.5 20l3-6L1 12l5.5-2-3-6 6.3 3.3z"/>'),
   // череп: волны зомби
   waves: svg('<path d="M12 3c-4.4 0-8 3.1-8 7.2 0 2.4 1.2 4.3 3 5.5V19a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3.3c1.8-1.2 3-3.1 3-5.5C20 6.1 16.4 3 12 3z"/><circle cx="9" cy="11" r="1.6" fill="currentColor"/><circle cx="15" cy="11" r="1.6" fill="currentColor"/><path d="M10 20v-2.5M14 20v-2.5M12 14.5l-.8 1.5h1.6z"/>'),
   // карта с маршрутом: сюжет
@@ -249,6 +258,27 @@ function render() {
     }).catch(() => { tb.innerHTML = `<p>${esc(t("lb_off"))}</p>`; });
     c.appendChild(btn(esc(t("m_back")), () => { page = back; render(); }, "", "back"));
     box.appendChild(c);
+  } else if (page === "done" && done) {
+    // глава пройдена: «Выжили!», мелко — какая глава, итоги, кнопка дальше
+    const d = done, s = d.stats, c = el("div", { class: "over win" });
+    c.appendChild(el("h1", {}, esc(d.title)));
+    c.appendChild(el("div", { class: "sub" }, esc(d.sub)));
+    const st = el("div", { class: "stats" });
+    const tile = (ic: keyof typeof ICON, v: string, l: string, hi = false) => st.appendChild(el("div", { class: "stat" + (hi ? " hi" : "") }, `<i>${ICON[ic]}</i><b>${esc(v)}</b><span>${esc(l)}</span>`));
+    tile("kills", String(s.kills), t("rs_kills"), true);
+    tile("dmg", String(Math.round(s.dmg * 10)), t("rs_dmg"));
+    tile("aim", s.shots ? `${Math.min(100, Math.round((s.hits / s.shots) * 100))}%` : "—", t("rs_acc"));
+    tile("time", fmtTime(Math.round(s.time)), t("rs_time"));
+    tile("score", `+${s.xp}`, t("rs_xp"));
+    tile("parts", `+${s.parts}`, t("rs_parts"));
+    tile("waves", String(s.deaths), t("rs_deaths"));
+    c.appendChild(st);
+    const go = btn(esc(d.last ? t("main_menu") : t("st_go_on")), () => d.go(), "main", d.last ? "home" : "story");
+    go.style.textAlign = "center"; go.style.marginTop = "6px";
+    if (d.client && !d.last) { go.setAttribute("disabled", ""); go.querySelector(".tx")!.innerHTML += `<small>${esc(t("st_host_go"))}</small>`; }
+    c.appendChild(go);
+    box.appendChild(c);
+    setTimeout(() => go.focus(), 50);
   } else if (page === "over" && over) {
     const o = over, c = el("div", { class: "over" });
     c.appendChild(el("div", { class: "skull" }, ICON.waves));
@@ -321,6 +351,15 @@ export function openOver(actions: MenuActions, r: Result, client: boolean) {
   over = { r, best: Math.max(old, r.score), newBest: r.score > old && old > 0, lb: "", ask: !settings.name && r.score > 0, client, sent: false };
   sendScore();
   ensureRoot(); root!.classList.add("dead");
+  render();
+}
+// ───────── глава пройдена ─────────
+export interface DoneInfo { title: string; sub: string; stats: { kills: number; dmg: number; shots: number; hits: number; time: number; xp: number; parts: number; deaths: number }; last: boolean; client: boolean; go(): void }
+let done: DoneInfo | null = null;
+export function openDone(d: DoneInfo) {
+  done = d; page = "done";
+  acts = acts ?? { waves: () => {}, host: () => {}, join: () => {}, changed: () => {} };
+  ensureRoot(); root!.classList.remove("dead");
   render();
 }
 export function closeMenu() { if (root) root.style.display = "none"; }
