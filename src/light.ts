@@ -236,10 +236,10 @@ export class Lighting {
     this.trees = this.trees.filter((t) => t.img !== img);
     this.casters = this.casters.filter((c) => c.img !== img);
   }
-  addTree(img: Phaser.GameObjects.Image) {
+  addTree(img: Phaser.GameObjects.Image, sq = 1) {
     // картинка перевёрнута по вертикали (верхушка уходит «вниз» от ствола), а сдвиг/наклон задаёт контейнер
     const sh = this.scene.make.image({ key: img.texture.key }, false).setOrigin(img.originX, 1 - img.originY)
-      .setDisplaySize(img.displayWidth, img.displayHeight).setFlipY(true).setTintFill(0x000000);
+      .setDisplaySize(img.displayWidth, img.displayHeight * sq).setFlipY(true).setFlipX(img.flipX).setTintFill(0x000000);
     const c = this.scene.add.container(img.x, img.y, [sh]).setDepth(-3.6);
     this.trees.push({ img, c, sh });
   }

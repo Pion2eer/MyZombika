@@ -7,8 +7,12 @@ export const GROUND = ["t_asphalt", "t_town", "t_factory", "t_dam", "t_water", "
 const FILES = import.meta.glob("./tiles/*.png", { eager: true, import: "default" }) as Record<string, string>;
 
 export function loadGroundFiles(scene: Phaser.Scene) {
+  if (FILES["./tiles/t_grass.png"]) scene.load.image("t_grass", FILES["./tiles/t_grass.png"]);
   for (const n of GROUND) { const f = FILES[`./tiles/${n}.png`]; if (f) scene.load.image(n, f); }
 }
+
+/** своя трава (src/tiles/t_grass.png) — основа земли вместо нарисованного луга */
+export const HAS_GRASS = !!FILES["./tiles/t_grass.png"];
 
 const S = 256;
 function rng(seed: number) { let s = seed; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; }

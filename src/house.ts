@@ -6,7 +6,7 @@ import Phaser from "phaser";
 /** стена в координатах дома: прямоугольник (px от левого верхнего угла) и высота, px */
 interface LocalBox { x0: number; y0: number; x1: number; y1: number; h: number }
 /** стена в мире: повёрнутый прямоугольник — центр, полуразмеры вдоль своих осей, поворот (cos, sin), высота, углы */
-export interface WallBox { cx: number; cy: number; ex: number; ey: number; c: number; s: number; h: number; pts: { x: number; y: number }[] }
+export interface WallBox { cx: number; cy: number; ex: number; ey: number; c: number; s: number; h: number; pts: { x: number; y: number }[]; /** нарисованная картинка: тень — её силуэт, а не коробка */ art?: boolean }
 export interface House {
   /** центр и поворот дома */
   cx: number; cy: number; c: number; s: number; w: number; h: number;
