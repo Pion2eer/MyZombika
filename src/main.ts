@@ -497,7 +497,7 @@ interface Gib {
 }
 const MEAT = [0x6a1a14, 0x8a2a20, 0x4a0e0a, 0xa0443a];
 const VOICE: Record<Kind, "groan" | "growl" | "squeak" | "roar"> = { zombie: "groan", runner: "groan", rat: "squeak", hyena: "growl", panther: "growl", bear: "roar", spitter: "groan", armored: "groan", brute: "roar", bloater: "groan" };
-interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number; /** предмет (бочка, ящик…) */ prop?: Prop; /** стоит «вертикально» (тень как у дерева) */ upright?: boolean; /** низкий — пули летят над ним */ low?: boolean }
+interface Ob { x: number; y: number; r: number; img: Phaser.GameObjects.Image; canopy: number; size: number; /** предмет (бочка, ящик…) */ prop?: Prop; /** стоит «вертикально» (тень как у дерева) */ upright?: boolean; /** низкий — пули летят над ним */ low?: boolean; /** тень рисуется отдельно (нарисованные постройки) */ noSh?: boolean }
 type PropKind = "barrel" | "drum" | "crate" | "car" | "fire" | "lamp" | "fence" | "sign" | "tires" | "deco";
 /** предмет на карте. Разрушаемые: бочка (взрывается), ящик (ломается, иногда с находкой) */
 interface Prop { id: number; kind: PropKind; x: number; y: number; hp: number; img: Phaser.GameObjects.Image; ob?: Ob; wall?: WallBox; dead: boolean;
@@ -713,8 +713,9 @@ class Game extends Phaser.Scene {
     this.buildFlow();
     // свет и тени: тени от деревьев и камней
     this.light = new Lighting(this, START_T);
-    for (const o of this.obs) if (!o.low) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
-    for (const [im, k] of this.artSh) this.light.addDrop(im, k);
+    for (const o of this.obs) if (!o.low && !o.noSh) o.canopy || o.upright ? this.light.addTree(o.img) : this.light.addCaster(o.img, o.r * 0.55);
+    // высокие (k < 0) — тень как у дерева, от основания; широкие постройки и машины — силуэт сразу за ними
+    for (const [im, k] of this.artSh) k < 0 ? this.light.addTree(im, -k) : this.light.addDrop(im, k);
     this.player = new Humanoid(this, this.px, this.py, "hero", PAL_HERO, true);
     cam.startFollow(this.player.c, true, 0.15, 0.15);
     this.actSh = this.add.renderTexture(0, 0, 8, 8).setOrigin(0).setDepth(-3.55);
@@ -1292,8 +1293,8 @@ class Game extends Phaser.Scene {
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
-          this.artSh.push([im, 1.2]);
-          this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p });
+          this.artSh.push([im, -0.7]);
+          this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p, noSh: true });
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
           this.artSh.push([im, 0.8]);
