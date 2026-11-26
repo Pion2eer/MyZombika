@@ -1289,7 +1289,7 @@ class Game extends Phaser.Scene {
         const y = rnd.between(500, H - 700);
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
-        this.artSh.push([im, -1.6]);
+        this.artSh.push([im, 0.75, 0.12]);
         yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
         p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
@@ -1337,11 +1337,12 @@ class Game extends Phaser.Scene {
         if (tall) {
           // высокое (труба, вышка, бак): основание — внизу картинки, препятствие — кружок
           im.setOrigin(0.5, 0.9).setDepth(y);
-          this.artSh.push([im, 0.6, 0.05]);
+          this.artSh.push([im, 0.6, 0.08]);
           this.obs.push({ x, y, r: w * 0.26, img: im, canopy: 0, size: w * 0.5, prop: p, noSh: true });
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
-          this.artSh.push([im, -1.6]);
+          // перевёрнутая тень из-под середины постройки; у мелкой техники ось выше, тень короче
+          this.artSh.push(BUILD_K_SMALL(name) ? [im, 0.6, 0.18] : [im, 0.75, 0.12]);
           const ex = w * 0.36, ey = h * 0.24;
           p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
           this.walls.push(p.wall);
@@ -1606,7 +1607,7 @@ class Game extends Phaser.Scene {
       const p = add("car", x, y, 999, im);
       const [ex, ey] = art ? [im.displayWidth * 0.42, im.displayHeight * 0.33] : { bus: [94, 24], van: [52, 22], car_teal: [43, 18] }[name] ?? [48, 20];
       p.wall = box(x, y, ex, ey, a, name === "bus" || name === "van" ? 34 : 24);
-      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); this.artSh.push([im, -0.7]); }
+      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); this.artSh.push([im, 0.35, 0.25]); }
       this.walls.push(p.wall);
       // рядом — бочки и покрышки
       const c = Math.cos(a), s = Math.sin(a);
@@ -1728,7 +1729,7 @@ class Game extends Phaser.Scene {
         const tex = this.textures.get("bd_tractor").getSourceImage(), k = buildK("tractor"), w = tex.width / k, h = tex.height / k;
         const tx = f.x + f.w * (1 - sx), ty = f.y + f.h * rnd.realInRange(0.4, 0.6);
         const im = this.add.image(tx, ty, "bd_tractor").setDisplaySize(w, h).setFlipX(rnd.frac() < 0.5).setOrigin(0.5, 0.85).setY(ty + h * 0.25).setDepth(ty + h * 0.15);
-        this.artSh.push([im, -0.8]);
+        this.artSh.push([im, 0.6, 0.18]);
         const p = add("deco", tx, ty, 999, im);
         p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; this.walls.push(p.wall);
       }
