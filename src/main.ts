@@ -1289,10 +1289,9 @@ class Game extends Phaser.Scene {
         const y = rnd.between(500, H - 700);
         if (!free(x, y, Math.max(w, h) * 0.45)) continue;
         const im = this.add.image(x, y + h * 0.25, "hs_" + name).setDisplaySize(w, h).setOrigin(0.5, 0.85).setDepth(y + h * 0.15);
-        this.artSh.push([im, 0.75, 0.12]);
         yards.push({ x, y: y + h * 0.12, w: w * 1.05, h: h * 0.6, path: true });
         const p: Prop = { id: 5000 + n, kind: "deco", x, y, hp: 999, img: im, dead: false }; this.props.push(p);
-        p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
+        p.wall = { cx: x, cy: y, ex: w * 0.34, ey: h * 0.26, c: 1, s: 0, h: 40, art: true, shH: h * 0.55, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * w * 0.34, y: y + v * h * 0.26 })) };
         this.walls.push(p.wall);
         this.obs.push({ x, y, r: Math.min(w, h) * 0.28, img: im, canopy: 0, size: 2, prop: p, low: true });
         n++;
@@ -1342,9 +1341,9 @@ class Game extends Phaser.Scene {
         } else {
           im.setOrigin(0.5, 0.85).setY(y + h * 0.25).setDepth(y + h * 0.15);
           // перевёрнутая тень из-под середины постройки; у мелкой техники ось выше, тень короче
-          this.artSh.push(BUILD_K_SMALL(name) ? [im, 0.6, 0.18] : [im, 0.75, 0.12]);
+          // тень — проекция объёма (коробка следа, поднятая на высоту постройки), см. тени стен в updateLight
           const ex = w * 0.36, ey = h * 0.24;
-          p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
+          p.wall = { cx: x, cy: y, ex, ey, c: 1, s: 0, h: 40, art: true, shH: h * (BUILD_K_SMALL(name) ? 0.45 : 0.5), pts: [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: x + u * ex, y: y + v * ey })) };
           this.walls.push(p.wall);
           this.obs.push({ x, y, r: Math.min(w, h) * 0.26, img: im, canopy: 0, size: 2, prop: p, low: true });
         }
@@ -1607,7 +1606,7 @@ class Game extends Phaser.Scene {
       const p = add("car", x, y, 999, im);
       const [ex, ey] = art ? [im.displayWidth * 0.42, im.displayHeight * 0.33] : { bus: [94, 24], van: [52, 22], car_teal: [43, 18] }[name] ?? [48, 20];
       p.wall = box(x, y, ex, ey, a, name === "bus" || name === "van" ? 34 : 24);
-      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); this.artSh.push([im, 0.35, 0.25]); }
+      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); p.wall.shH = im.displayHeight * 0.4; }
       this.walls.push(p.wall);
       // рядом — бочки и покрышки
       const c = Math.cos(a), s = Math.sin(a);
@@ -1729,9 +1728,8 @@ class Game extends Phaser.Scene {
         const tex = this.textures.get("bd_tractor").getSourceImage(), k = buildK("tractor"), w = tex.width / k, h = tex.height / k;
         const tx = f.x + f.w * (1 - sx), ty = f.y + f.h * rnd.realInRange(0.4, 0.6);
         const im = this.add.image(tx, ty, "bd_tractor").setDisplaySize(w, h).setFlipX(rnd.frac() < 0.5).setOrigin(0.5, 0.85).setY(ty + h * 0.25).setDepth(ty + h * 0.15);
-        this.artSh.push([im, 0.6, 0.18]);
         const p = add("deco", tx, ty, 999, im);
-        p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; this.walls.push(p.wall);
+        p.wall = box(tx, ty, w * 0.36, h * 0.24, 0, 30); p.wall.art = true; p.wall.shH = h * 0.5; this.walls.push(p.wall);
       }
     }
     // предупреждающие таблички
@@ -2309,13 +2307,20 @@ class Game extends Phaser.Scene {
     }
     if (shA > 0.01) rt.endDraw();
     // тени стен дома от солнца: прямоугольник + он же, сдвинутый по солнцу на высоту стены
-    if (settings.quality !== "low" && !flashSh && SHADOW_ALPHA * sun.day > 0.01 && this.walls.length) {
+    if (!flashSh && SHADOW_ALPHA * sun.day > 0.01 && this.walls.length) {
       const g = (this.wallShG ??= this.make.graphics({}, false)).clear().fillStyle(0x000000);
       for (const w of this.walls) {
-        if (w.art || !onView(w.cx, w.cy)) continue;
-        const d = w.h * sun.len * SHADOW, sx = Math.cos(sun.ang) * d, sy = Math.sin(sun.ang) * d;
-        const pts = w.pts;
-        g.fillPoints(hull([...pts, ...pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))]).map((q) => ({ x: q.x - ox, y: q.y - oy })), true);
+        if ((w.art && !w.shH) || !onView(w.cx, w.cy)) continue;
+        const d = (w.shH ?? w.h) * sun.len * SHADOW, sx = Math.cos(sun.ang) * d, sy = Math.sin(sun.ang) * d;
+        const pts = w.pts, hp = hull([...pts, ...pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))]);
+        if (!w.shH) { g.fillStyle(0x000000, 1).fillPoints(hp.map((q) => ({ x: q.x - ox, y: q.y - oy })), true); continue; }
+        // у построек и машин — мягкий край: тот же контур чуть шире и чуть уже, слоями
+        let mx = 0, my = 0; for (const q of hp) { mx += q.x; my += q.y; } mx /= hp.length; my /= hp.length;
+        const sz = Math.max(20, Math.hypot(w.ex, w.ey));
+        for (const [e, al] of [[7, 0.3], [2, 0.45], [-4, 1]] as const) {
+          const k = 1 + e / sz;
+          g.fillStyle(0x000000, al).fillPoints(hp.map((q) => ({ x: mx + (q.x - mx) * k - ox, y: my + (q.y - my) * k - oy })), true);
+        }
       }
       rt.draw(g);
     }
