@@ -569,3 +569,37 @@ function artBase(img: Phaser.GameObjects.Image): number | null {
   BASE.set(key, res);
   return res;
 }
+
+const FOOT = new Map<string, { u: number; v: number }[]>();
+/**
+ * След предмета на земле по самой картинке (а не коробкой): по каждому столбцу — самый нижний непрозрачный пиксель
+ * (колёса, низ корпуса), и та же линия, поднятая на depth (доля высоты) — глубина следа в виде 3/4.
+ * Возвращает точки в мире; тень — их контур, вытянутый по солнцу на высоту предмета.
+ */
+export function artFootprint(img: Phaser.GameObjects.Image, depth: number): { x: number; y: number }[] | null {
+  const key = img.texture.key;
+  let uv = FOOT.get(key);
+  if (!uv) {
+    uv = [];
+    try {
+      const src = img.texture.getSourceImage() as HTMLImageElement, w = src.width, h = src.height;
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const c = cv.getContext("2d")!; c.drawImage(src, 0, 0);
+      const d = c.getImageData(0, 0, w, h).data, step = Math.max(1, Math.floor(w / 28));
+      for (let x = 0; x < w; x += step) {
+        // столбец считаем, только если в нём заметно предмета (не тонкая антенна/шланг)
+        let n = 0, low = -1;
+        for (let y = 0; y < h; y++) if (d[(y * w + x) * 4 + 3] > 160) { n++; low = y; }
+        if (n > h * 0.12) uv.push({ u: x / w, v: (low + 1) / h });
+      }
+    } catch { uv = []; }
+    FOOT.set(key, uv);
+  }
+  if (uv.length < 3) return null;
+  const W = img.displayWidth, H = img.displayHeight, fx = img.flipX ? -1 : 1, out: { x: number; y: number }[] = [];
+  for (const p of uv) {
+    const x = img.x + fx * (p.u - 0.5) * W + (0.5 - img.originX) * W, y = img.y + (p.v - img.originY) * H;
+    out.push({ x, y: y - 2 }, { x, y: y - depth * H });
+  }
+  return out;
+}
