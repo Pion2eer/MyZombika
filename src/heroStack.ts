@@ -539,3 +539,174 @@ export function bossHead(): Vox {
   });
   return m;
 }
+
+// ───── «Хозяин» в двойной детализации: сетка 64×64, вдвое больше слоёв (рисуется с масштабом ½) ─────
+const N2 = 64, C2 = 32;
+function fill2(m: Vox, f: (u: number, v: number, z: number, x: number, y: number) => number) {
+  for (let zi = 0; zi < m.z; zi++)
+    for (let y = 0; y < N2; y++)
+      for (let x = 0; x < N2; x++) {
+        // u, v, z — в старых единицах (полвокселя), чтобы формы совпадали с прежней моделью
+        const col = f((x + 0.5 - C2) / 2, (y + 0.5 - C2) / 2, (zi + m.z0) / 2, x, y);
+        if (col >= 0) m.c[(zi * N2 + y) * N2 + x] = col;
+      }
+}
+const vox2 = (z0: number, z: number): Vox => ({ n: N2, z, z0, c: new Int32Array(N2 * N2 * z).fill(-1) });
+const mix = (a: number, b: number, t: number) => {
+  const c = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
+  return (c(16) << 16) | (c(8) << 8) | c(0);
+};
+
+/** тело «Хозяина» (по art/gen/props/boss_ref.png), слои 0..39 (в старых единицах 0..19,5) */
+export function bossBody2(plates: boolean): Vox {
+  const m = vox2(0, 40);
+  const RUST = [0x8a4e26, 0x7a421e, 0x9a5c2e, 0x6e3a1a], RUST_HI = 0xc8844a, RUST_DK = 0x3e2010, RIVET = 0xc89a60;
+  const FLESH = 0xb84a3c, FLESH_DK = 0x7a2418, CH = 0x6a625a, CH_DK = 0x2e2a26;
+  const TANK = 0xb03a22, TANK_DK = 0x7a2414, TANK_RUST = 0xc8925a;
+  const RAG = [0x2e2a2c, 0x24201e, 0x3e3836, 0x1a1816];
+  /** кожа: пятна-язвы с тёмным краем, синюшные пятна, лёгкий шум */
+  const skin = (u: number, v: number, z: number, r: number) => {
+    const s = hash(Math.floor(u * 0.9 + 40), Math.floor(v * 0.9 + 40), Math.floor(z * 0.9));
+    const s2 = hash(Math.floor(u * 2 + 90), Math.floor(v * 2 + 90), Math.floor(z * 2));
+    if (s < 0.09) return s2 < 0.55 ? FLESH : FLESH_DK;
+    if (s < 0.12) return mix(SKIN_SH, FLESH_DK, 0.35);
+    if (s > 0.86) return shade(SKIN_SH, 0.95 + r * 0.08);
+    return shade(SKIN, 0.9 + r * 0.14);
+  };
+  /** ржавая пластина: светлая кромка, заклёпки, подтёки */
+  const plate = (edge: number, rivet: boolean, r: number, z: number) => {
+    if (rivet) return RIVET;
+    if (edge < 0.7) return RUST_HI;
+    if (edge < 1.3) return RUST_DK;
+    return r < 0.12 ? RUST_DK : r > 0.9 ? RUST_HI : pick(RUST, (r + z * 0.07) % 1);
+  };
+  fill2(m, (u, v, z, x, y) => {
+    const r = hash(x, y, Math.round(z * 2));
+    const e = (cu: number, cv: number, ru: number, rv: number) => ((u - cu) / ru) ** 2 + ((v - cv) / rv) ** 2;
+    const ang = Math.atan2(v, u);
+    // ── баллон на спине: лежит поперёк, хомуты, заглушки, вентиль-колесо сверху ──
+    {
+      const tu = u + 6.4, tz = z - 15.4, d = tu * tu + tz * tz * 1.25;
+      if (Math.abs(v) < 7.6 && d < 3.0 ** 2) {
+        if (Math.abs(v) > 7.0) return d < 1.4 ** 2 ? 0x2a2a2a : TANK_DK;
+        if (Math.abs(Math.abs(v) - 3.5) < 0.45) return LEATHER; // ремни
+        const top = tz > 1.2;
+        if (hash(Math.floor(v * 1.5 + 20), Math.floor(tz * 2 + 20), 3) < 0.22) return TANK_RUST; // облезшая краска
+        return top ? shade(TANK, 1.12) : tz < -1.4 ? TANK_DK : TANK;
+      }
+      // вентиль: стойка и колесо
+      if (Math.abs(v + 1.2) < 0.5 && Math.abs(tu) < 0.5 && tz >= 2.6 && tz < 3.6) return 0x3a3a3a;
+      if (tz >= 3.6 && tz < 4.1 && Math.abs(Math.hypot(tu, v + 1.2) - 1.3) < 0.4) return 0x5a5a5a;
+      // трубка от вентиля к плечу
+      if (Math.abs(tz - 3.0) < 0.4 && Math.abs(tu - 0.6) < 0.4 && v > -1 && v < 6) return 0x4a4a46;
+    }
+    // ── ноги-тумбы с пальцами ──
+    if (z < 2.5) {
+      for (const s of [-1, 1]) {
+        if (e(0.6, s * 5, 2.9, 2.6) < 1) return shade(SKIN_SH, 0.8 + z * 0.06 + r * 0.1);
+        // пальцы впереди
+        if (z < 0.8 && u > 2.6 && u < 4 && Math.abs(v - s * 5) < 2.2 && Math.floor((v - s * 5 + 3) * 1.4) % 2 === 0) return 0xd8c8a8;
+      }
+      return -1;
+    }
+    // ── лохмотья: рваные полосы, длина своя у каждой ──
+    if (z < 5.5) {
+      const strip = Math.floor((ang + Math.PI) * 9);
+      const len = 1.2 + hash(strip, 7, 1) * 3.2;
+      if (z < 5.5 - len) return -1;
+      if (e(0.4, 0, 5.8 + hash(strip, 3, 2) * 1.4, 9.8 + hash(strip, 5, 2) * 1.4) < 1) return (strip & 1) ? RAG[0] : r < 0.3 ? RAG[3] : RAG[2];
+      return -1;
+    }
+    // ── туловище: бочка, горбится вперёд ──
+    if (z < 13.5) {
+      const t = (z - 4) / 9, ru = 6.4 + Math.sin(t * Math.PI) * 1.6, rv = 9 + t * 2.6, cu = 0.4 + t * 1.1;
+      const q = e(cu, 0, ru, rv);
+      if (q < 1) {
+        const front = u - cu > ru - 2.4;
+        // латы на груди: прямоугольник с кромкой и заклёпками по краю
+        if (plates && front && z >= 7 && z <= 12.5 && Math.abs(v) < 6.2) {
+          const ev = 6.2 - Math.abs(v), ez = Math.min(z - 7, 12.5 - z), edge = Math.min(ev, ez);
+          const rivet = edge > 0.6 && edge < 1.4 && (Math.abs(v) > 5 ? Math.abs((z * 2) % 3 - 1.5) < 0.6 : Math.abs((v * 2 + 40) % 3 - 1.5) < 0.6);
+          return plate(edge, rivet, r, z);
+        }
+        // цепь наискосок: звенья-кольца поочерёдно поперёк и вдоль
+        const cs = v * 0.62 + (z - 9) * 0.78, cd = v * 0.78 - (z - 9) * 0.62; // вдоль и поперёк цепи
+        if (front && Math.abs(cd) < 1.1) {
+          const k = Math.floor(cs / 1.3), lu = cs - (k + 0.5) * 1.3;
+          const ring = (k & 1) ? Math.abs(Math.hypot(lu * 1.2, cd * 1.6) - 0.85) < 0.3 : Math.abs(cd) < 0.32 && Math.abs(lu) < 0.75;
+          if (ring) return (k & 1) ? CH : mix(CH, CH_DK, 0.3);
+          if (Math.abs(cd) < 0.9) return CH_DK;
+        }
+        // пояс-лохмотья, свисающие клочья поверх живота
+        if (z < 6.2) return pick(RAG, r);
+        if (z < 8 && front && hash(Math.floor((ang + 4) * 10), 9, 9) < 0.35) return RAG[0];
+        // пупок-шрам и складки на животе
+        if (front && Math.abs(z - 7.2) < 0.3 && Math.abs(v) < 3) return SKIN_SH;
+        return skin(u, v, z, r);
+      }
+      // горб сзади
+      if (z >= 10 && e(-2.2, 0, 5, 6.8) < 1) return skin(u, v, z, r);
+      return -1;
+    }
+    // ── плечи: огромные наплечники из нахлёстом лежащих пластин (или голые бугры мышц) ──
+    if (z < 17) {
+      const h = (z - 13) / 3.6;
+      for (const s of [-1, 1]) {
+        const k = Math.sqrt(Math.max(0, 1 - h * h)), ru = 5.6 * k, rv = 5.8 * k;
+        const q = e(0.6, s * 9.6, ru, rv);
+        if (q < 1) {
+          if (!plates) return z > 16.2 && r < 0.3 ? FLESH : skin(u, v, z, r);
+          // пластины: каждая следующая выше и уже; нижний край пластины — тёмная полоса, над ней светлая кромка
+          const lz = (z - 13) * 1.25, lame = Math.floor(lz), f = lz - lame;
+          const out = Math.sqrt(q) > 0.82;
+          if (out && f < 0.22) return RUST_DK;
+          if (out && f > 0.85) return RUST_HI;
+          // заклёпки рядом по краю каждой пластины
+          const ra = Math.atan2(v - s * 9.6, u - 0.6);
+          if (out && f > 0.35 && f < 0.7 && Math.abs(((ra + 4) * 3.2) % 1 - 0.5) < 0.16) return RIVET;
+          // верх: тёмные потёки ржавчины
+          if (hash(Math.floor(u + 50), Math.floor(v + 50), lame) < 0.07) return 0x5a3016; // редкие подтёки
+          return shade(RUST[lame & 1 ? 2 : 0], 0.94 + f * 0.16 + r * 0.05); // пластина светлеет к верхней кромке
+        }
+        // ремни наплечников
+        if (plates && Math.abs(v - s * 6.2) < 0.4 && z < 14.2 && e(1, 0, 8.4, 12) < 1) return LEATHER;
+      }
+      // горб между плечами
+      if (z < 16 && e(-1.4, 0, 4.4 - (z - 13), 6.2 - (z - 13) * 1.2) < 1) return skin(u, v, z, r);
+    }
+    return -1;
+  });
+  return m;
+}
+
+/** голова «Хозяина»: маленькая лысая, вдавлена между плеч и выдвинута вперёд; надбровья, жёлтые глаза, ноздри, оскал, уши, язвы */
+export function bossHead2(): Vox {
+  const m = vox2(26, 14);
+  fill2(m, (u, v, z, x, y) => {
+    const r = hash(x, y, Math.round(z * 2));
+    const cu = 4.7, zc = 16.4, du = u - cu, dz = z - zc;
+    const d = (du / 3.5) ** 2 + (v / 3.2) ** 2 + (dz / 3.4) ** 2;
+    // уши
+    if (Math.abs(Math.abs(v) - 3.2) < 0.5 && Math.abs(du + 0.4) < 0.8 && Math.abs(dz) < 0.9) return SKIN_SH;
+    // нижняя челюсть выпирает вперёд
+    const jaw = dz < -1.2 && dz > -3 && du > 0 && du < 3.9 && Math.abs(v) < 2.6 - (dz + 3) * 0.2;
+    if (d >= 1 && !jaw) return -1;
+    const front = du > 2.3 || (jaw && du > 2.9);
+    if (front) {
+      // надбровная дуга
+      if (dz > 0.9 && dz < 1.5) return shade(SKIN_SH, 0.9);
+      // глаза: светятся, с тёмной впадиной вокруг
+      const ev = Math.abs(Math.abs(v) - 1.35);
+      if (dz > -0.2 && dz < 0.9 && ev < 0.55) return dz > 0.3 ? EYE : EYE_WHITE;
+      if (dz > -0.5 && dz < 1 && ev < 0.95) return 0x3a2430;
+      // ноздри
+      if (dz > -1.1 && dz < -0.5 && Math.abs(Math.abs(v) - 0.45) < 0.3) return 0x2a1418;
+      // оскал: зубы и тёмная пасть
+      if (dz > -2.4 && dz < -1.3 && Math.abs(v) < 1.9) return Math.abs(dz + 1.85) < 0.25 ? 0x3a0a08 : (Math.floor(v * 2.4 + 10) % 2 ? 0xe8d8b0 : 0xc8b890);
+    }
+    // язвы и вены на макушке
+    if (dz > 1.6 && hash(Math.floor(u * 2), Math.floor(v * 2), 7) < 0.1) return 0xb84a3c;
+    return shade(dz > 0.8 ? SKIN : SKIN_SH, 0.9 + r * 0.12);
+  });
+  return m;
+}

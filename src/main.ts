@@ -19,7 +19,7 @@ import { PROP_ART, loadPropFiles, makePropArt, type PropArt } from "./propArt";
 import { buildHouse, hull, inHouse, wDist, wLocal, wWorld, type House, type WallBox } from "./house";
 import { NET, host as netHost, join as netJoin, send, leave as netLeave, drop as netDrop } from "./net";
 import { Lighting, SHADOW, SHADOW_ALPHA, artFootprint, silTex, type Circle } from "./light";
-import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, ammoVox, bossBody, bossHead, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
+import { ARM_V, ARM_Z, PAL_HERO, PAL_ZOMBIE_A, PAL_ZOMBIE_B, armorVox, ammoVox, bossBody2, bossHead2, grenadeVox, medkitVox, heroBody, heroHead, renderStack, torsoOf, setPalette, type Palette } from "./heroStack";
 
 let W = 3000, H = 3000; // размер мира, px (в сюжете — длинная вертикальная полоса)
 /** в сюжете не ставим деревья и камни на заслоны, в лагеря и у ящиков с оружием */
@@ -175,9 +175,10 @@ function makeStack(scene: Phaser.Scene, key: string, pal: Palette, part: "body" 
 /** «Хозяин»: своя модель (по картинке ChatGPT), с латами и без */
 function makeBoss(scene: Phaser.Scene) {
   setPalette(PAL_BOSS);
-  for (const [key, m, w] of [["zBossA_body", bossBody(true), 31], ["zBoss_body", bossBody(false), 31], ["zBoss_head", bossHead(), 21]] as const) {
+  // сетка 64 и вдвое больше слоёв: в атласе K px на воксель, в игре — масштаб ½ (BOSS_DET)
+  for (const [key, m, w] of [["zBossA_body", bossBody2(true), 62], ["zBoss_body", bossBody2(false), 62], ["zBoss_head", bossHead2(), 42]] as const) {
     if (scene.textures.exists(key)) continue;
-    const A = renderStack(m, { frames: FRAMES, k: K, dz: DZ, smooth: true, zTop: 32, w });
+    const A = renderStack(m, { frames: FRAMES, k: K, dz: DZ, smooth: true, zTop: 64, w });
     const t = scene.textures.addCanvas(key, A.canvas)!;
     for (let f = 0; f < FRAMES; f++) t.add(f, 0, (f % A.cols) * A.fw, Math.floor(f / A.cols) * A.fh, A.fw, A.fh);
     origins[key] = { x: A.ox / A.fw, y: A.oy / A.fh };
@@ -264,6 +265,11 @@ class Humanoid {
     this.head = scene.add.image(0, 0, hk, 0).setOrigin(origins[hk].x, origins[hk].y).setScale(VOX / K);
     this.c = scene.add.container(x, y, [shadow, ...this.feet, this.back, this.body, this.front, this.head]);
   }
+  /** модель в d раз детальнее (сетка d×32): картинки срезов рисуются в 1/d масштаба */
+  detail(d: number) {
+    for (const im of [this.body, this.head, this.sBody, this.sHead]) im.setScale(VOX / K / d);
+    for (const f of this.feet) f.setVisible(false); // у босса ноги в модели
+  }
   /** a — куда смотрит тело/голова, ma — куда идёт, ph — фаза шага, moving — идёт ли; muzzle — вспышка. */
   pose(a: number, ma: number, ph: number, moving: number, muzzle = false, sway = 0) {
     this.body.setFrame(frameOf(a + sway * 0.12));
@@ -298,12 +304,26 @@ class Humanoid {
       if (this.bulk > 1) {
         // босс: голые ручищи-бревна, одна — раздутая дубина в язвах
         const b = this.bulk, isClub = this.club === side;
+        // рука — цепочка бугров (мышцы), а не палка: контур, тень снизу, свет сверху, язвы
+        const seg = (x0: number, y0: number, x1: number, y1: number, r0: number, r1: number, pass: number) => {
+          const n = 7;
+          for (let i = 0; i <= n; i++) {
+            const t = i / n, bump = 1 + 0.12 * Math.sin(t * Math.PI * 2.2 + side);
+            const r = (r0 + (r1 - r0) * t) * b * bump, x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+            if (pass === 0) g.fillStyle(OUT).fillCircle(x, y, r + 0.9);
+            else if (pass === 1) g.fillStyle(this.pal.SKIN_SH).fillCircle(x, y, r);
+            else g.fillStyle(skin).fillCircle(x - r * 0.12, y - r * 0.22, r * 0.72);
+          }
+        };
+        const wx = e.x + (h.x - e.x) * 0.8, wy = e.y + (h.y - e.y) * 0.8;
+        for (let pass = 0; pass < 3; pass++) { seg(s.x, s.y, e.x, e.y, 3.1, 2.5, pass); seg(e.x, e.y, wx, wy, 2.5, 1.9, pass); }
         sg.lineStyle(5 * b, 0x000000).lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y).fillCircle(h.x, h.y, (isClub ? 5.5 : 3) * b * 0.8);
-        g.lineStyle(6.4 * b, OUT).lineBetween(s.x, s.y, e.x, e.y).lineBetween(e.x, e.y, h.x, h.y);
-        g.fillStyle(OUT).fillCircle(s.x, s.y, 3.4 * b).fillCircle(e.x, e.y, 3 * b);
-        g.lineStyle(4.8 * b, this.pal.SKIN_SH).lineBetween(s.x, s.y, e.x, e.y).lineStyle(4.2 * b, skin).lineBetween(s.x, s.y - 0.4, e.x, e.y - 0.4);
-        g.lineStyle(4 * b, skin).lineBetween(e.x, e.y, h.x, h.y).fillStyle(skin).fillCircle(e.x, e.y, 2.1 * b);
-        g.fillStyle(0xb84a3c).fillCircle(e.x + 1, e.y - 0.5, 0.9 * b).fillCircle((s.x + e.x) / 2, (s.y + e.y) / 2, 0.7 * b);
+        // язвы: тёмный край, красная середина
+        for (const [t, k] of [[0.35, 1], [0.7, 0.7]] as const) {
+          const x = s.x + (e.x - s.x) * t, y = s.y + (e.y - s.y) * t - 0.6;
+          g.fillStyle(0x6a2018).fillCircle(x, y, 0.75 * b * k).fillStyle(0xc85a48).fillCircle(x - 0.15, y - 0.15, 0.45 * b * k);
+        }
+        { const x = e.x + (wx - e.x) * 0.5, y = e.y + (wy - e.y) * 0.5 - 0.5; g.fillStyle(0x6a2018).fillCircle(x, y, 0.6 * b).fillStyle(0xc85a48).fillCircle(x, y, 0.35 * b); }
         if (isClub) {
           // раздутая кисть-дубина: несколько опухолей разного размера, тень снизу, пара язв
           const R0 = 4.2 * b, L = [[0, 0, 1], [0.55, -0.35, 0.62], [-0.5, 0.3, 0.58], [0.2, 0.6, 0.5], [-0.35, -0.55, 0.45]] as const;
@@ -312,8 +332,17 @@ class Humanoid {
           for (const [dx, dy, k] of L) g.fillStyle(skin).fillCircle(h.x + dx * R0 - 0.6, h.y + dy * R0 - 0.8, R0 * k * 0.72);
           g.fillStyle(0x9a3428).fillCircle(h.x + R0 * 0.3, h.y + R0 * 0.1, R0 * 0.22).fillStyle(0xb84a3c).fillCircle(h.x - R0 * 0.4, h.y + R0 * 0.35, R0 * 0.16);
         } else {
-          g.fillStyle(OUT).fillCircle(h.x, h.y, 3.3 * b).fillStyle(skin).fillCircle(h.x, h.y, 2.5 * b);
-          for (const f of [-1, 0, 1]) g.fillStyle(0xe8d8b0).fillCircle(h.x + Math.cos(a + f * 0.5) * 2.8 * b, h.y + Math.sin(a + f * 0.5) * 2.8 * b, 0.55 * b); // когти
+          // кисть: ладонь, три толстых пальца и жёлтые когти
+          for (const f of [-1, 0, 1]) {
+            const fa = a + f * 0.55, fx = h.x + Math.cos(fa) * 2.4 * b, fy = h.y + Math.sin(fa) * 2.4 * b;
+            g.lineStyle(1.9 * b, OUT).lineBetween(h.x, h.y, fx, fy);
+          }
+          g.fillStyle(OUT).fillCircle(h.x, h.y, 2.6 * b).fillStyle(this.pal.SKIN_SH).fillCircle(h.x, h.y, 2.0 * b).fillStyle(skin).fillCircle(h.x - 0.3, h.y - 0.5, 1.4 * b);
+          for (const f of [-1, 0, 1]) {
+            const fa = a + f * 0.55, fx = h.x + Math.cos(fa) * 2.4 * b, fy = h.y + Math.sin(fa) * 2.4 * b;
+            g.lineStyle(1.2 * b, skin).lineBetween(h.x, h.y, fx, fy);
+            g.fillStyle(0x2a1a10).fillCircle(fx + Math.cos(fa) * 0.5 * b, fy + Math.sin(fa) * 0.5 * b, 0.55 * b).fillStyle(0xe0d0a0).fillCircle(fx + Math.cos(fa) * 0.6 * b, fy + Math.sin(fa) * 0.6 * b, 0.35 * b);
+          }
         }
         return;
       }
@@ -2305,7 +2334,7 @@ class Game extends Phaser.Scene {
       const [sk, pal] = kind === "zombie" ? ["zA", PAL_ZOMBIE_A] as const : kind === "spitter" ? ["zC", PAL_ZOMBIE_C] as const
         : kind === "armored" ? ["zD", PAL_ZOMBIE_D] as const : kind === "brute" ? ["zE", PAL_ZOMBIE_E] as const : kind === "bloater" ? ["zF", PAL_ZOMBIE_F] as const : kind === "boss" ? ["zBoss", PAL_BOSS] as const : ["zB", PAL_ZOMBIE_B] as const;
       e.hum = new Humanoid(this, x, y, sk, pal, false);
-      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; e.hum.bulk = 1.3; e.hum.club = -1; e.tankFx = this.flames(x, y, 0.75); }
+      if (kind === "boss") { e.boss = true; e.plates = true; e.hum.setArmor(true); e.mh = K_.hp; e.hum.bulk = 1.3; e.hum.club = -1; e.hum.detail(2); e.tankFx = this.flames(x, y, 0.75); }
       if (kind === "spitter") e.throwT = rand(1.5, 3);
       if (kind === "armored") { e.arm = ARMOR_PTS; e.hum.setArmor(true); }
       e.c = e.hum.c;
@@ -2980,7 +3009,7 @@ class Game extends Phaser.Scene {
     const big = e.kind === "bear" ? 2.2 : e.kind === "rat" ? 0.5 : 1;
     if (e.hum) {
       const h = e.hum;
-      this.gib(h.head.texture.key, 0xffffff, e.x, e.y, 16, dir + rand(-0.5, 0.5), rand(120, 220), rand(220, 340), { frame: Number(h.head.frame.name), scale: VOX / K, blood: KINDS[e.kind].blood, life: rand(12, 16) });
+      this.gib(h.head.texture.key, 0xffffff, e.x, e.y, 16, dir + rand(-0.5, 0.5), rand(120, 220), rand(220, 340), { frame: Number(h.head.frame.name), scale: h.head.scaleX, blood: KINDS[e.kind].blood, life: rand(12, 16) });
       this.gibs[this.gibs.length - 1].o.setOrigin(0.5, 0.62);
       h.head.setVisible(false);
       for (const side of [0, 1]) if (h.armsOn[side]) this.tearArm(e, side, dir, 1.3);
