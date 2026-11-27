@@ -1750,6 +1750,8 @@ class Game extends Phaser.Scene {
     // брошенные машины (прямоугольник-препятствие, как стены дома)
     const th = S.story ? CHAPTERS[CH].theme : "farm";
     const nCars = th === "junk" ? 24 : th === "tunnel" ? 16 : th === "road" ? 12 : 8;
+    // занятые машинами прямоугольники картинок: машины не наезжают друг на друга, на заслоны и не стоят поперёк края дороги
+    const carBoxes: { x0: number; x1: number; y0: number; y1: number }[] = [];
     for (let n = 0, tries = 0; n < nCars && tries < 900; tries++) {
       const x = rnd.between(200, W - 200), y = rnd.between(200, H - 200);
       if (!free(x, y, th === "tunnel" ? 70 : 62)) continue;
@@ -1765,11 +1767,20 @@ class Game extends Phaser.Scene {
         f = along ? 6 : flip ? 4 : 0;
         im = this.add.image(x, y, art).setDisplaySize(tex.width / OBJ_K, tex.height / OBJ_K).setFlipX(flip && !along).setDepth(y);
       } else im = this.add.image(x, y, "sv_" + name, f).setDisplaySize(o.w * SV_SCALE, o.h * SV_SCALE).setOrigin(o.x, o.y).setDepth(y);
+      if (art) im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3);
+      {
+        const bb = im.getBounds(), q = { x0: bb.x, x1: bb.right, y0: bb.y, y1: bb.bottom };
+        const bad = carBoxes.some((c) => q.x0 < c.x1 + 24 && q.x1 > c.x0 - 24 && q.y0 < c.y1 + 18 && q.y1 > c.y0 - 18)
+          || (S.story && GATES.some((g) => g > q.y0 - 40 && g < q.y1 + 30))
+          || (S.story && onPave(th, q.x0 + 12) !== onPave(th, q.x1 - 12));
+        if (bad) { im.destroy(); continue; }
+        carBoxes.push(q);
+      }
       const a = (f / 8) * TAU;
       const p = add("car", x, y, 999, im);
       const [ex, ey] = art ? [im.displayWidth * 0.42, im.displayHeight * 0.33] : { bus: [94, 24], van: [52, 22], car_teal: [43, 18] }[name] ?? [48, 20];
       p.wall = box(x, y, ex, ey, a, name === "bus" || name === "van" ? 34 : 24);
-      if (art) { p.wall.art = true; im.setOrigin(0.5, 0.8).setY(y + im.displayHeight * 0.3); p.wall.shH = im.displayHeight * 0.4; p.wall.foot = artFootprint(im, 0.15) ?? undefined; }
+      if (art) { p.wall.art = true; p.wall.shH = im.displayHeight * 0.4; p.wall.foot = artFootprint(im, 0.15) ?? undefined; }
       this.walls.push(p.wall);
       // рядом — бочки и покрышки
       const c = Math.cos(a), s = Math.sin(a);
@@ -2695,6 +2706,9 @@ class Game extends Phaser.Scene {
     this.blood.setParticleTint(KINDS[e.kind].blood); this.blood.explode(18, x, y - 10);
     this.shock(x, y, 0.22);
     this.splat(e.x + b.dx * 14, e.y + b.dy * 10, KINDS[e.kind].blood, rand(4, 7));
+    // осколки разрывной задевают и своих, если стоят вплотную
+    if (Math.hypot(this.px - x, this.py - y) < 46) this.hurtPlayer(6);
+    for (const m of this.mates.values()) if (!m.dead && Math.hypot(m.x - x, m.y - y) < 46) this.hurtMate(m, 6);
     for (const q of this.enemies) {
       if (q.dead || Math.hypot(q.x - x, q.y - y) > 46 + KINDS[q.kind].r) continue;
       const kb = (b.kb * 1.8) / KINDS[q.kind].mass;
@@ -2920,10 +2934,15 @@ class Game extends Phaser.Scene {
       else this.hitFx(e, a, 2, 1.3, e.hum && Math.random() < 0.6 ? (Math.random() < 0.5 ? 0 : 1) : -1);
     }
     if (NET.role !== "client") {
+      // по игрокам — вся зона взрыва (как видно по кольцу): в центре до 45, на краю 6; ещё и отбрасывает
+      const PR = R + 10, hit = (d: number) => Math.round(6 + 39 * (1 - d / PR) ** 1.3);
       const pd = Math.hypot(this.px - x, this.py - y);
-      const PR = 95 * power;
-      if (pd < PR) this.hurtPlayer(Math.round(5 + 30 * (1 - pd / PR)));
-      for (const m of this.mates.values()) { const md = Math.hypot(m.x - x, m.y - y); if (md < PR) this.hurtMate(m, Math.round(5 + 30 * (1 - md / PR))); }
+      if (pd < PR && !this.dead) {
+        this.hurtPlayer(hit(pd));
+        const a = Math.atan2(this.py - y, this.px - x), k = 26 * (1 - pd / PR), q = this.collide(this.px + Math.cos(a) * k, this.py + Math.sin(a) * k, 10);
+        this.px = q.x; this.py = q.y;
+      }
+      for (const m of this.mates.values()) { const md = Math.hypot(m.x - x, m.y - y); if (md < PR && !m.dead) this.hurtMate(m, hit(md)); }
     }
     // искры, земля, воронка
     this.blood.setParticleTint(0xffb040);
