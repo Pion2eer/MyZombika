@@ -728,7 +728,7 @@ class Game extends Phaser.Scene {
       tunnel: ["jersey", "jersey", "cone", "cone", "barrier", "rubble", "trash_bin", "gas_cyl", "sign_post", "tire_stack"],
     }[th];
   }
-  seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false; holdT = -1; holdSp = 0; holdNet = 0; holdG?: Phaser.GameObjects.Graphics;
+  seg = 0; deadT = 0; woke: boolean[] = []; campDone: boolean[] = []; strT = 8; gateMsgT = 0; storyEnd = false; benchG?: Phaser.GameObjects.Graphics; holdT = -1; holdSp = 0; holdNet = 0; holdG?: Phaser.GameObjects.Graphics;
   burns: Burn[] = [];
   lookX = 0; lookY = 0; beatT = 0; ambT = 4;
   constructor() { super("game"); }
@@ -1350,6 +1350,17 @@ class Game extends Phaser.Scene {
   /** верстак — в пройденном лагере */
   storyBench() {
     S.bench = CAMPS.some((c, i) => this.campDone[i] && Math.hypot(this.px - c.x, this.py - c.y) < 190);
+    // зона мастерской у взятого лагеря: золотой пунктирный круг на земле, мерцает
+    const g = (this.benchG ??= this.add.graphics().setDepth(-3.8));
+    g.clear();
+    const v = this.cameras.main.worldView, tt = this.time.now / 1000;
+    CAMPS.forEach((c, i) => {
+      if (!this.campDone[i] || c.y < v.y - 220 || c.y > v.bottom + 220) return;
+      const al = (S.bench ? 0.75 : 0.4) + 0.15 * Math.sin(tt * 3);
+      g.lineStyle(3, 0xffd070, al);
+      for (let k = 0; k < 36; k++) { const a0 = (k / 36) * TAU + tt * 0.15, a1 = a0 + TAU / 72; g.beginPath(); g.arc(c.x, c.y, 186, a0, a1); g.strokePath(); }
+      g.fillStyle(0xffd070, 0.05 + (S.bench ? 0.04 : 0)).fillCircle(c.x, c.y, 186);
+    });
   }
   /** лагерь взят (у хозяина и у гостей): лечение, патроны, баннер */
   campReached(i: number) {
@@ -4021,6 +4032,24 @@ class UI extends Phaser.Scene {
   info!: Phaser.GameObjects.Text;
   big!: Phaser.GameObjects.Text;
   holdTx?: Phaser.GameObjects.Text;
+  benchTx?: Phaser.GameObjects.Text;
+  /** в зоне мастерской: табличка сверху «Здесь можно улучшить оружие» — нажать или U */
+  drawBenchHint(g: Phaser.GameObjects.Graphics, w: number, hits: { x: number; y: number; w: number; h: number; fn: () => void }[]) {
+    const on = S.story && S.bench && !S.over && !S.inv && !S.paused && !(S.hold > 0);
+    if (!on) { this.benchTx?.setVisible(false); return; }
+    const sc = Math.min(1.2, Math.max(0.8, w / 1000));
+    const tx = (this.benchTx ??= this.add.text(0, 0, "", { fontFamily: "Rubik, system-ui, sans-serif", fontSize: "18px", fontStyle: "800", color: "#fff0c8", stroke: "#2a1608", strokeThickness: 4, align: "center" }).setOrigin(0.5).setDepth(5));
+    tx.setText(`🔧 ${t("bench_here")}${S.touch ? "" : "  [U]"}`).setFontSize(17 * sc);
+    const y = 96 * sc, bw = tx.width + 44 * sc, bh = 38 * sc, x0 = w / 2 - bw / 2, pulse = 0.5 + 0.5 * Math.sin(this.time.now / 260);
+    tx.setPosition(w / 2, y + bh / 2).setVisible(true);
+    // табличка в стиле меню: бронзовая рамка, оранжевая пластина, светится
+    g.fillStyle(0xffb040, 0.18 + 0.18 * pulse).fillRoundedRect(x0 - 6, y - 6, bw + 12, bh + 12, 12);
+    g.fillStyle(0x8a5418, 1).fillRoundedRect(x0, y, bw, bh, 9);
+    g.fillStyle(0xc06418, 1).fillRoundedRect(x0 + 3, y + 3, bw - 6, bh - 6, 7);
+    g.fillStyle(0xe08a2c, 1).fillRoundedRect(x0 + 3, y + 3, bw - 6, (bh - 6) * 0.5, { tl: 7, tr: 7, bl: 0, br: 0 });
+    g.fillStyle(0xf2c880, 1).fillCircle(x0 + 10 * sc, y + bh / 2, 2.4 * sc).fillCircle(x0 + bw - 10 * sc, y + bh / 2, 2.4 * sc);
+    hits.push({ x: x0, y, w: bw, h: bh, fn: () => { S.invTab = 1; if (!S.inv) this.gm.toggleInv(); } });
+  }
   /** оборона: таймер «держитесь» сверху по центру */
   drawHold(g: Phaser.GameObjects.Graphics, w: number) {
     const on = S.story && S.hold > 0 && !S.over && !S.inv;
@@ -4528,6 +4557,7 @@ class UI extends Phaser.Scene {
     }
     this.drawBanner(g, w, h, dt);
     this.drawHold(g, w);
+    this.drawBenchHint(g, w, hits);
     this.drawRain(w, h, dt);
     // кнопка паузы (в кооперативе мир не останавливается — кнопки нет)
     if (!S.over && NET.role === "solo") {
